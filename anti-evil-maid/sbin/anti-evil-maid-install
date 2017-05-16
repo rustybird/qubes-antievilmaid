@@ -30,6 +30,12 @@ Arguments:
 
   -F: passed on to mkfs.ext4 (don't ask for confirmation, etc.)
 
+  -2: set up a two-factor auth AEM media (EXPERIMENTAL)
+      Based on LUKS key files, provides resistance to shoulder surfing
+      and video surveillance based passphrase snooping.
+
+  -f: force installation even if some error-prone checks fail
+
 
 Examples:
   Install on the system's boot partition (assuming that it is /dev/sda1), and
@@ -42,6 +48,11 @@ Examples:
 
     anti-evil-maid-install -s .sd /dev/mmcblk0p1
 
+  Install 2FA-enabled AEM on a USB stick, formatting to bootable ext4 and
+  labeling the new filesystem as "$LABEL_PREFIX".2fa:
+
+    anti-evil-maid-install -2 -s .2fa /dev/sdb
+
 END
 
     exit 1
@@ -50,11 +61,15 @@ END
 
 # check invocation
 
+FORCE=0
+TWOFA=0
 unset LABEL_SUFFIX F
 while getopts s:Fh opt; do
     case "$opt" in
         s) LABEL_SUFFIX=$OPTARG ;;
         F) F=-F ;;
+        2) TWOFA=1;;
+        f) FORCE=1;;
         *) usage ;;
     esac
 done
@@ -104,6 +119,19 @@ if ! [ "$PART_NUM" -gt 0 ]; then
 fi
 
 
+# 2FA-specific checks
+
+if ! external "$PART_DEV"; then
+    log "2FA-enabled AEM cannot be installed on the same storage device as Qubes OS."
+    exit 1
+elif ! removable "$PART_DEV" && [ "$FORCE" -eq 0 ]; then
+    log "2FA-enabled AEM can only be used with removable media."
+    log "Should the device be, in fact, removable (autodetection failed),"
+    log "this check can be skipped by re-running with '-f' argument added."
+    exit 1
+fi
+
+
 # This check (instead of a more obvious 'mountpoint $BOOT_DIR') should work
 # even in unusual setups without any internal boot partition at all:
 
@@ -142,6 +170,27 @@ if [   -n "$OLD_LABEL" -a \
        -e "$AEM_DIR/$OLD_LABEL" -a \
      ! -e "$AEM_DIR/$LABEL" ]; then
     mv -v "$AEM_DIR/$OLD_LABEL" "$AEM_DIR/$LABEL"
+fi
+
+
+# 2FA: generate and enroll a LUKS key file if not already present
+
+if [ "$TWOFA" -eq 1 -a ! -f "$AEM_DIR/$LABEL/secret.key" ]; then
+    log "Generating new LUKS key file"
+    rawkey=$(mktemp)
+    dd bs=1024 count=4 if=/dev/random of="$rawkey"
+
+    log "Encrypting key file"
+    openssl enc -aes-256-cbc -e -in "$rawkey" -out "$AEM_DIR/$LABEL/secret.key"
+
+    for dev in $(getluksuuids); do
+        devname=$(readlink -f "/dev/disk/by-uuid/$dev")
+        log "Adding key file to new key slot for $devname (UUID $dev)"
+        cryptsetup luksAddKey "/dev/disk/by-uuid/$dev" "$rawkey"
+    done
+
+    log "Shredding the unencrypted key file"
+    shred -zu "$rawkey"
 fi
 
 
