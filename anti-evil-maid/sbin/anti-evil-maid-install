@@ -171,7 +171,7 @@ fi
 
 # 2FA: generate and enroll a LUKS key file if not already present
 
-if twofa && [ ! -f "$AEM_DIR/$LABEL/secret.key" ]; then
+if twofa && [ ! -e "$AEM_DIR/$LABEL/secret.key" ]; then
     log "Generating new LUKS key file"
     rawkey=$(mktemp)
     head -c 64 /dev/random > "$rawkey"
