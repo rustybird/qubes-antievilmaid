@@ -177,6 +177,7 @@ if twofa && [ ! -e "$AEM_DIR/$LABEL/secret.key" ]; then
     head -c 64 /dev/random > "$rawkey"
 
     log "Encrypting key file"
+    mkdir -p "$AEM_DIR/$LABEL"
     scrypt enc "$rawkey" "$AEM_DIR/$LABEL/secret.key"
 
     for dev in $(getluksuuids); do
