@@ -11,7 +11,7 @@ usage() {
     cat <<END
 
 Usage:
-  anti-evil-maid-install [-s <suffix>] [-F] <device>
+  anti-evil-maid-install [-s <suffix>] [-F] [-2] <device>
 
   Installs Anti Evil Maid to your system's boot partition, or to a different
   storage device (e.g. an SD card or a USB stick).
@@ -34,8 +34,6 @@ Arguments:
       Based on LUKS key files, provides resistance to shoulder surfing
       and video surveillance based passphrase snooping.
 
-  -f: force installation even if some error-prone checks fail
-
 
 Examples:
   Install on the system's boot partition (assuming that it is /dev/sda1), and
@@ -49,7 +47,7 @@ Examples:
     anti-evil-maid-install -s .sd /dev/mmcblk0p1
 
   Install 2FA-enabled AEM on a USB stick, formatting to bootable ext4 and
-  labeling the new filesystem as "$LABEL_PREFIX".2fa:
+  labeling the new filesystem as "$LABEL_PREFIX.2fa":
 
     anti-evil-maid-install -2 -s .2fa /dev/sdb
 
@@ -61,15 +59,13 @@ END
 
 # check invocation
 
-FORCE=0
-TWOFA=0
+alias twofa=false
 unset LABEL_SUFFIX F
-while getopts s:Fh opt; do
+while getopts s:Fh2 opt; do
     case "$opt" in
         s) LABEL_SUFFIX=$OPTARG ;;
         F) F=-F ;;
-        2) TWOFA=1;;
-        f) FORCE=1;;
+        2) alias twofa=true ;;
         *) usage ;;
     esac
 done
@@ -124,10 +120,10 @@ fi
 if ! external "$PART_DEV"; then
     log "2FA-enabled AEM cannot be installed on the same storage device as Qubes OS."
     exit 1
-elif ! removable "$PART_DEV" && [ "$FORCE" -eq 0 ]; then
+elif ! removable "$PART_DEV" "$LABEL" ; then
     log "2FA-enabled AEM can only be used with removable media."
     log "Should the device be, in fact, removable (autodetection failed),"
-    log "this check can be skipped by re-running with '-f' argument added."
+    log "add '.rm=1' at the end of disk label suffix using the '-s' option."
     exit 1
 fi
 
@@ -175,13 +171,13 @@ fi
 
 # 2FA: generate and enroll a LUKS key file if not already present
 
-if [ "$TWOFA" -eq 1 -a ! -f "$AEM_DIR/$LABEL/secret.key" ]; then
+if twofa && [ ! -f "$AEM_DIR/$LABEL/secret.key" ]; then
     log "Generating new LUKS key file"
     rawkey=$(mktemp)
-    dd bs=1024 count=4 if=/dev/random of="$rawkey"
+    head -c 64 /dev/random > "$rawkey"
 
     log "Encrypting key file"
-    openssl enc -aes-256-cbc -e -in "$rawkey" -out "$AEM_DIR/$LABEL/secret.key"
+    scrypt enc "$rawkey" "$AEM_DIR/$LABEL/secret.key"
 
     for dev in $(getluksuuids); do
         devname=$(readlink -f "/dev/disk/by-uuid/$dev")

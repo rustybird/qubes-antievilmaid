@@ -96,7 +96,7 @@ external() {
 }
 
 removable() {
-    _rm=$(lsblk -dnr -o RM,LABEL "$1")
+    _rm="$(lsblk -dnr -o RM "$1") ${2-$(lsblk -dnr -o LABEL "$1")}"
     case "$_rm" in
         *.rm=[01]) _rm=${_rm##*=} ;;
                 *) _rm=${_rm%% *} ;;
