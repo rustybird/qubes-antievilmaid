@@ -46,10 +46,10 @@ Examples:
 
     anti-evil-maid-install -s .sd /dev/mmcblk0p1
 
-  Install 2FA-enabled AEM on a USB stick, formatting to bootable ext4 and
-  labeling the new filesystem as "$LABEL_PREFIX.2fa":
+  Install 2FA-enabled AEM on USB stick's first partition, overwriting it with
+  a new ext4 filesystem and marking it bootable:
 
-    anti-evil-maid-install -2 -s .2fa /dev/sdb
+    anti-evil-maid-install -2 /dev/sdb1
 
 END
 
