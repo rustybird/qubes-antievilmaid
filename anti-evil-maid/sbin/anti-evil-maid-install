@@ -31,8 +31,8 @@ Arguments:
   -F: passed on to mkfs.ext4 (don't ask for confirmation, etc.)
 
   -2: set up a two-factor auth AEM media (EXPERIMENTAL)
-      Based on LUKS key files, provides resistance to shoulder surfing
-      and video surveillance based passphrase snooping.
+      Using time-based one time password and a LUKS key file, provides resistance
+      to shoulder surfing and video surveillance based passphrase snooping.
 
 
 Examples:
@@ -168,6 +168,74 @@ if [   -n "$OLD_LABEL" -a \
     mv -v "$AEM_DIR/$OLD_LABEL" "$AEM_DIR/$LABEL"
 fi
 
+
+# 2FA: generate a TOTP seed
+
+if twofa && [ ! -e "$AEM_DIR/$LABEL/secret.otp" ]; then
+    log "Generating new 160-bit TOTP seed"
+    mkdir -p "$AEM_DIR/$LABEL"
+    # TODO: Fedora 23 does not include base32 binary in coreutils
+    # package, use python's base64 module as a workaround until
+    # dom0 is upgraded to Fedora 24+. Afterwards, simply replace
+    # the `python3 ...` line with `base32 -w 0 \`
+    # (don't forget to remove python3 from spec file requires)
+    head -c 20 /dev/random \
+        | python3 -c 'import sys,base64;print(base64.b32encode(sys.stdin.buffer.read()).decode("ascii"))' \
+        | tr -d '=' \
+        > "$AEM_DIR/$LABEL/secret.otp"
+
+    # construct OTP URI
+    otp_label="Anti%20Evil%20Maid"
+    otp_issuer="Qubes%20OS"
+    otp_secret="$(cat "$AEM_DIR/$LABEL/secret.otp")"
+    otp_uri="otpauth://totp/${otp_label}?issuer=${otp_issuer}&secret=${otp_secret}"
+
+    # create an ANSI text QR code and show it in the terminal
+    echo "$otp_uri" | qrencode -t ansi
+
+    # create a QR code PNG image
+    echo "$otp_uri" | qrencode -t png -o "$AEM_DIR/$LABEL/totp-seed.png"
+
+    # show QR code / path to PNG
+    log "Please scan the above QR code with your 2FA device."
+    log "If the text version of QR code is unreadable, a PNG"
+    log "image version of it can be displayed by typing the"
+    log "following into another terminal:"
+    log "    display $AEM_DIR/$LABEL/totp-seed.png"
+
+    # display the text form of secret to user, too
+    human_readable_secret="$(echo "$otp_secret" | sed 's/\(....\)/\1\ /g')"
+    log "Alternatively, you may manually enter the following secret into"
+    log "your 2FA device:"
+    log "    $human_readable_secret"
+
+    # check whether secret was provisioned correctly
+    log ""
+    log "After you have set up your 2FA device, please enter the code"
+    log "displayed on your device and press <ENTER> to continue."
+    log ""
+
+    totp_tries=3
+    for try in $(seq $totp_tries); do
+        read -p "Code: "
+        if ! oathtool --totp -b "$otp_secret" "$REPLY"; then
+            log "Entered TOTP code is invalid!"
+            if [ "$try" -lt $totp_tries ]; then
+                log "Please check clock synchronization."
+                log "If you made a mistake while manually entering the secret, please"
+                log "remove the added token, repeat the process and try again."
+                log ""
+            else
+                log "Aborting AEM setup..."
+                exit 1
+            fi
+        else
+            break
+        fi
+    done
+
+    log "2FA code matches, continuing AEM setup."
+fi
 
 # 2FA: generate and enroll a LUKS key file if not already present
 

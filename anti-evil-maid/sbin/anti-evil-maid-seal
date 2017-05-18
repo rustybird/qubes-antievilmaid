@@ -41,7 +41,7 @@ fi
 mkdir -p "$TPM_DIR/$LABEL"
 
 SEALED=0
-for ext in txt png key; do
+for ext in txt png key otp; do
      input=$AEM_DIR/$LABEL/secret.$ext
     output=$TPM_DIR/$LABEL/secret.$ext.sealed2
 
