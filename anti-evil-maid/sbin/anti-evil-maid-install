@@ -117,10 +117,10 @@ fi
 
 # 2FA-specific checks
 
-if ! external "$PART_DEV"; then
+if twofa && ! external "$PART_DEV"; then
     log "2FA-enabled AEM cannot be installed on the same storage device as Qubes OS."
     exit 1
-elif ! removable "$PART_DEV" "$LABEL" ; then
+elif twofa && ! removable "$PART_DEV" "$LABEL" ; then
     log "2FA-enabled AEM can only be used with removable media."
     log "Should the device be, in fact, removable (autodetection failed),"
     log "add '.rm=1' at the end of disk label suffix using the '-s' option."
