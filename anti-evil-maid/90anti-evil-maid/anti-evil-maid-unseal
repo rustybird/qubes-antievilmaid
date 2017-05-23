@@ -1,4 +1,7 @@
 #!/bin/bash
+
+. /lib/dracut-lib.sh
+
 set -e -o pipefail
 shopt -s expand_aliases
 
@@ -107,13 +110,29 @@ done
 
 sealed_secret_txt=$TPM_DIR/$LABEL/secret.txt.sealed2
 sealed_secret_png=$TPM_DIR/$LABEL/secret.png.sealed2
+sealed_secret_key=$TPM_DIR/$LABEL/secret.key.sealed2
+sealed_secret_otp=$TPM_DIR/$LABEL/secret.otp.sealed2
 
-if plymouth_active && [ -e "$sealed_secret_png" ]; then
-    alias png=true
-    SEALED_SECRET=$sealed_secret_png
+if [ -e "$sealed_secret_otp" ]; then
+    if ! external "$DEV" || ! removable "$DEV"; then
+        message "2FA AEM device not external/removable, aborting!"
+        exit 1
+    fi
+
+    alias twofa=true
+    SEALED_SECRET=$sealed_secret_otp
+
+    if [ -e "$sealed_secret_key" ]; then
+        alias split_twofa=false
+    else
+        # TODO: implement
+        alias split_twofa=true
+        message "Split 2FA AEM not yet supported!"
+        exit 1
+    fi
 else
-    alias png=false
-    SEALED_SECRET=$sealed_secret_txt
+    alias twofa=false
+    alias split_twofa=false
 fi
 
 mkdir -p "$CACHE_DIR"
@@ -139,7 +158,79 @@ else
     done
 fi
 
-log "Unsealing the secret..."
+if twofa; then
+    log "Unsealing TOTP shared secret seed..."
+    if tpm_unsealdata $Z -i "$SEALED_SECRET" -o "$UNSEALED_SECRET" \
+            < "$SRK_PASSWORD_CACHE"; then
+        SEALED_SECRET=$sealed_secret_key
+        log "TOTP secret unsealed."
+        seed=$(cat "$UNSEALED_SECRET")
+
+        message "Please verify your 2FA device displays the same TOTP code"
+        message "as shown below. Should the codes match, press <ENTER> to"
+        message "unseal your LUKS key file. If you do now have access to"
+        message "your 2FA device but wish to continue despite the security"
+        message "implications, press <ENTER>. Pressing <Q> will revert"
+        message "back to displaying PNG/TXT secret (if provisioned)."
+        message "Otherwise, shut down the computer."
+        message ""
+        message "[ $(date) ] TOTP code: $(oathtool --totp -b "$seed")"
+
+        if plymouth_active; then
+            plymouth watch-keystroke --keys=$'\n' --command='touch /tmp/2fa-cont' &
+            plymouth watch-keystroke --keys=Qq --command='touch /tmp/2fa-skip' &
+            while [ ! -e /tmp/2fa-cont ] && [ ! -e /tmp/2fa-skip ]; do
+                now=$(date +%s)
+                if [ "$((now % 30))" -eq 0 ] && [ ! "$last" == "$now" ]; then
+                    message "[ $(date) ] TOTP code: $(oathtool --totp -b "$seed")"
+                    last=$now
+                else
+                    sleep 0.1
+                fi
+            done
+
+            if [ -e /tmp/2fa-skip ]; then
+                alias twofa=false
+		message "Reverting back to non-2FA AEM boot"
+            fi
+            rm -f /tmp/2fa-{cont,skip}
+        else
+            tout=$((30 - ($(date +%s) % 30)))
+            while true; do
+                if systemd-ask-password --echo --timeout "$tout" \
+                        "Press <ENTER> to continue or <Q> + <ENTER> to skip 2FA." \
+                        >/tmp/2fa-resp; then
+                    if grep -qi q /tmp/2fa-resp; then
+                        alias twofa=false
+		        message "Reverting back to non-2FA AEM boot"
+                    fi
+                    rm -f /tmp/2fa-resp
+                    break
+                fi
+
+                message "[ $(date) ] TOTP code: $(oathtool --totp -b "$seed")"
+                tout=30
+            done
+        fi
+
+        rm -f "$UNSEALED_SECRET"
+    fi
+fi
+
+
+alias png=false
+if twofa; then
+    # user does not want to skip 2FA
+    SEALED_SECRET=$sealed_secret_key
+elif plymouth_active && [ -e "$sealed_secret_png" ]; then
+    alias png=true
+    SEALED_SECRET=$sealed_secret_png
+else
+    SEALED_SECRET=$sealed_secret_txt
+fi
+
+
+log "Unsealing the secret $SEALED_SECRET..."
 if tpm_unsealdata $Z -i "$SEALED_SECRET" -o "$UNSEALED_SECRET" \
    <"$SRK_PASSWORD_CACHE"; then
     rm -rf "$CACHE_DIR"
@@ -150,22 +241,51 @@ umount "$MNT"
 
 
 if [ ! -d "$CACHE_DIR" ]; then  # unseal succeeded
-    if png; then
-        # display secret in next dialog
-        WHERE="next to the prompt for it"
-        if file "$UNSEALED_SECRET" 2>/dev/null | grep -q PNG; then
-            cp "$UNSEALED_SECRET" "$PLYMOUTH_THEME_UNSEALED_SECRET"
-        fi
+    if twofa; then
+        # ask for LUKS key file passphrase
+        for try in 1 2 3; do
+            if systemd-ask-password "LUKS key file password" |
+                    scrypt dec -P "$UNSEALED_SECRET" "$UNSEALED_SECRET.dec"; then
+                log "Correct LUKS key file password"
+                # TODO: handle discard (TRIM) according to "rd.luks.allow-discards"
+                # TODO: host-only dracut has /etc/crypttab in initramfs, we should
+                #       parse and obey the cryptsetup names & options found there
+                for luksid in $(getluksuuids); do
+                    log "Attempting to unlock $luksid with key file"
+                    waitfor -b "/dev/disk/by-uuid/$luksid"
+                    if cryptsetup open --type luks \
+                            --key-file "$UNSEALED_SECRET.dec" \
+                            "/dev/disk/by-uuid/$luksid" \
+                            "luks-$luksid"; then
+                        message "Unlocked $luksid"
+                    else
+                        message "Failed to unlock $luksid with decrypted key file"
+                    fi
+                done
+                rm -f "$UNSEALED_SECRET.dec" /tmp/aem-cur-luks-name
+                break
+            else
+                log "Wrong LUKS key file password"
+            fi
+        done
     else
-        # display secret in current dialog
-        WHERE="above"
-        {
-            message ""
-            message "$(cat "$UNSEALED_SECRET" 2>/dev/null)"
-            message ""
-        } 2>&1  # don't put the secret into the journal
+        if png; then
+            # display secret in next dialog
+            WHERE="next to the prompt for it"
+            if file "$UNSEALED_SECRET" 2>/dev/null | grep -q PNG; then
+                cp "$UNSEALED_SECRET" "$PLYMOUTH_THEME_UNSEALED_SECRET"
+            fi
+        else
+            # display secret in current dialog
+            WHERE="above"
+            {
+                message ""
+                message "$(cat "$UNSEALED_SECRET" 2>/dev/null)"
+                message ""
+            } 2>&1  # don't put the secret into the journal
+        fi
+        message "Never type in your disk password unless the secret $WHERE is correct!"
     fi
-    message "Never type in your disk password unless the secret $WHERE is correct!"
 
 
     # pause

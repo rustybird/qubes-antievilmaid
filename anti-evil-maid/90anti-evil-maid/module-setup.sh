@@ -23,6 +23,7 @@ install() {
         /usr/sbin/anti-evil-maid-lib \
         clear \
         cut \
+        date \
         file \
         /usr/share/misc/magic \
         grep \
@@ -30,7 +31,9 @@ install() {
         install \
         killall \
         lsblk \
+        oathtool \
         printf \
+        scrypt \
         sha1sum \
         sha256sum \
         sort \
@@ -38,6 +41,7 @@ install() {
         tcsd \
         tcsd_changer_identify \
         tee \
+        touch \
         tpm_getpubek \
         tpm_id \
         tpm_pcr_extend \

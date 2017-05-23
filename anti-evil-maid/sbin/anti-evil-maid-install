@@ -185,29 +185,36 @@ if twofa && [ ! -e "$AEM_DIR/$LABEL/secret.otp" ]; then
         > "$AEM_DIR/$LABEL/secret.otp"
 
     # construct OTP URI
-    otp_label="Anti%20Evil%20Maid"
-    otp_issuer="Qubes%20OS"
+    otp_label="Qubes%20OS%3A%20Anti%20Evil%20Maid"
     otp_secret="$(cat "$AEM_DIR/$LABEL/secret.otp")"
-    otp_uri="otpauth://totp/${otp_label}?issuer=${otp_issuer}&secret=${otp_secret}"
+    otp_uri="otpauth://totp/${otp_label}?secret=${otp_secret}"
 
     # create an ANSI text QR code and show it in the terminal
-    echo "$otp_uri" | qrencode -t ansi
+    # TODO: current qrencode version's ansiutf8 output has a
+    # small cosmetic bug whereas it outputs an extra row of
+    # pixels (the QR code still works just fine). Plain ansi
+    # may be selected as a workaround, but results in a much
+    # larger QR code which might scroll off in the terminal
+    # emulator.
+    echo "$otp_uri" | qrencode -t ansiutf8
 
-    # create a QR code PNG image
-    echo "$otp_uri" | qrencode -t png -o "$AEM_DIR/$LABEL/totp-seed.png"
-
-    # show QR code / path to PNG
+    # show QR code
     log "Please scan the above QR code with your 2FA device."
-    log "If the text version of QR code is unreadable, a PNG"
-    log "image version of it can be displayed by typing the"
-    log "following into another terminal:"
-    log "    display $AEM_DIR/$LABEL/totp-seed.png"
 
     # display the text form of secret to user, too
     human_readable_secret="$(echo "$otp_secret" | sed 's/\(....\)/\1\ /g')"
     log "Alternatively, you may manually enter the following secret into"
     log "your 2FA device:"
     log "    $human_readable_secret"
+
+    if timedatectl status | grep -q 'RTC in local TZ: yes'; then
+        log ""
+        log "WARNING: Your computer's RTC (real-time clock) is set to"
+        log "store time in local timezone. This will cause wrong TOTP"
+        log "codes to be generated during AEM boot. Please fix this by"
+        log "running (as root):"
+        log "    timedatectl set-local-rtc 0"
+    fi
 
     # check whether secret was provisioned correctly
     log ""
@@ -222,7 +229,7 @@ if twofa && [ ! -e "$AEM_DIR/$LABEL/secret.otp" ]; then
             log "Entered TOTP code is invalid!"
             if [ "$try" -lt $totp_tries ]; then
                 log "Please check clock synchronization."
-                log "If you made a mistake while manually entering the secret, please"
+                log "If you made a mistake while manually entering the secret,"
                 log "remove the added token, repeat the process and try again."
                 log ""
             else
