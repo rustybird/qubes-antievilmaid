@@ -11,7 +11,7 @@ usage() {
     cat <<END
 
 Usage:
-  anti-evil-maid-install [-s <suffix>] [-F] [-2] <device>
+  anti-evil-maid-install [-s <suffix>] [-F] [-m] [-M <device>] [-S <suffix>] <device>
 
   Installs Anti Evil Maid to your system's boot partition, or to a different
   storage device (e.g. an SD card or a USB stick).
@@ -30,9 +30,16 @@ Arguments:
 
   -F: passed on to mkfs.ext4 (don't ask for confirmation, etc.)
 
-  -2: set up a two-factor auth AEM media (EXPERIMENTAL)
+  -m: set up a multi-factor auth AEM media (EXPERIMENTAL)
       Using time-based one time password and a LUKS key file, provides resistance
       to shoulder surfing and video surveillance based passphrase snooping.
+
+  -M: split multi-factor AEM (key file on separate media); implies "-m"
+      Slightly increases resistance to multi-stage evil maid attacks.
+
+  -S: label suffix for split multi-factor AEM device
+      Same semantics as the "-s" argument listed above, except the length
+      limit is 0-7 characters here.
 
 
 Examples:
@@ -49,7 +56,11 @@ Examples:
   Install 2FA-enabled AEM on USB stick's first partition, overwriting it with
   a new ext4 filesystem and marking it bootable:
 
-    anti-evil-maid-install -2 /dev/sdb1
+    anti-evil-maid-install -m /dev/sdb1
+
+  Same as above, but storing LUKS key file on a separate USB stick (/dev/sdc1):
+
+    anti-evil-maid-install -M /dev/sdc1 /dev/sdb1
 
 END
 
@@ -59,19 +70,24 @@ END
 
 # check invocation
 
-alias twofa=false
-unset LABEL_SUFFIX F
-while getopts s:Fh2 opt; do
+alias mfa=false
+unset LABEL_SUFFIX F SPLIT_DEV SPLIT_LABEL_SUFFIX
+while getopts s:FhmM:S: opt; do
     case "$opt" in
         s) LABEL_SUFFIX=$OPTARG ;;
         F) F=-F ;;
-        2) alias twofa=true ;;
+        m) alias mfa=true ;;
+        M) alias mfa=true; SPLIT_DEV=$OPTARG ;;
+        S) SPLIT_LABEL_SUFFIX=$OPTARG ;;
         *) usage ;;
     esac
 done
 
 case "$LABEL_SUFFIX" in *[!$LABEL_SUFFIX_CHARS]*|??????????????*) usage; esac
 LABEL=$LABEL_PREFIX$LABEL_SUFFIX
+
+case "$SPLIT_LABEL_SUFFIX" in *[!$LABEL_SUFFIX_CHARS]*|????????*) usage; esac
+SPLIT_LABEL=$SPLIT_LABEL_PREFIX$SPLIT_LABEL_SUFFIX
 
 shift $(($OPTIND - 1))
 case $# in
@@ -115,16 +131,44 @@ if ! [ "$PART_NUM" -gt 0 ]; then
 fi
 
 
-# 2FA-specific checks
+# MFA-specific checks
 
-if twofa && ! external "$PART_DEV"; then
-    log "2FA-enabled AEM cannot be installed on the same storage device as Qubes OS."
+if mfa && ! external "$PART_DEV"; then
+    log "MFA-enabled AEM cannot be installed on the same storage device as Qubes OS."
     exit 1
-elif twofa && ! removable "$PART_DEV" "$LABEL" ; then
-    log "2FA-enabled AEM can only be used with removable media."
+elif mfa && ! removable "$PART_DEV" "$LABEL" ; then
+    log "MFA-enabled AEM can only be used with removable media."
     log "Should the device be, in fact, removable (autodetection failed),"
     log "add '.rm=1' at the end of disk label suffix using the '-s' option."
     exit 1
+fi
+
+
+# examine split-MFA device
+
+if [ -n "$SPLIT_DEV" ]; then
+    SPLIT_WHOLE_DEV=$(lsblk -dnp -o PKNAME "$SPLIT_DEV")
+    if ! [ -b "$SPLIT_WHOLE_DEV" -a "$SPLIT_WHOLE_DEV" != "$SPLIT_DEV" ]; then
+        log "Couldn't find parent device: $SPLIT_WHOLE_DEV"
+        exit 1
+    fi
+
+    SPLIT_PART_DEV_REAL=$(readlink -f "$SPLIT_DEV")
+    SPLIT_PART_NUM=${SPLIT_PART_DEV_REAL##*[!0-9]}
+    if ! [ "$SPLIT_PART_NUM" -gt 0 ]; then
+        log "Couldn't extract partition number: $SPLIT_PART_NUM"
+        exit 1
+    fi
+
+    if ! external "$SPLIT_DEV"; then
+        log "Split-MFA cannot be installed on the same storage device as Qubes OS."
+        exit 1
+    elif ! removable "$SPLIT_DEV" "$SPLIT_LABEL"; then
+        log "Split-MFA can only be used with removable media."
+        log "Should the device be, in fact, removable (autodetection failed),"
+        log "add '.rm=1' at the end of disk label suffix using the '-S' option."
+        exit 1
+    fi
 fi
 
 
@@ -149,6 +193,19 @@ case "$OLD_LABEL" in "$LABEL_PREFIX"*)
 esac
 
 
+# split-MFA label keeper
+if [ -n "$SPLIT_DEV" ]; then
+    OLD_SPLIT_LABEL=$(lsblk -dnr -o LABEL "$SPLIT_DEV") ||
+    OLD_SPLIT_LABEL=
+
+    case "$OLD_SPLIT_LABEL" in "$SPLIT_LABEL_PREFIX"*)
+        if [ -z "${SPLIT_LABEL_SUFFIX+set}" ]; then
+            SPLIT_LABEL=$OLD_SPLIT_LABEL
+        fi
+    esac
+fi
+
+
 # create and/or label fs
 
 if replace; then
@@ -157,6 +214,14 @@ if replace; then
 else
     log "Labeling filesystem $LABEL"
     e2label "$PART_DEV" "$LABEL"
+fi
+
+
+# always recreate split-MFA FS
+
+if [ -n "$SPLIT_DEV" ]; then
+    log "Creating new ext4 filesystem labeled $SPLIT_LABEL"
+    mkfs.ext4 $F -L "$SPLIT_LABEL" "$SPLIT_DEV"
 fi
 
 
@@ -169,16 +234,17 @@ if [   -n "$OLD_LABEL" -a \
 fi
 
 
-# 2FA: generate a TOTP seed
+# MFA: generate a TOTP seed
 
-if twofa && [ ! -e "$AEM_DIR/$LABEL/secret.otp" ]; then
+if mfa && [ ! -e "$AEM_DIR/$LABEL/secret.otp" ]; then
     log "Generating new 160-bit TOTP seed"
     mkdir -p "$AEM_DIR/$LABEL"
     # TODO: Fedora 23 does not include base32 binary in coreutils
     # package, use python's base64 module as a workaround until
     # dom0 is upgraded to Fedora 24+. Afterwards, simply replace
     # the `python3 ...` line with `base32 -w 0 \`
-    # (don't forget to remove python3 from spec file requires)
+    # (don't forget to remove python3 from spec file and AEM
+    # dracut module requires & add base32 binary to initramfs)
     head -c 20 /dev/random \
         | python3 -c 'import sys,base64;print(base64.b32encode(sys.stdin.buffer.read()).decode("ascii"))' \
         | tr -d '=' \
@@ -199,12 +265,12 @@ if twofa && [ ! -e "$AEM_DIR/$LABEL/secret.otp" ]; then
     echo "$otp_uri" | qrencode -t ansiutf8
 
     # show QR code
-    log "Please scan the above QR code with your 2FA device."
+    log "Please scan the above QR code with your OTP device."
 
     # display the text form of secret to user, too
     human_readable_secret="$(echo "$otp_secret" | sed 's/\(....\)/\1\ /g')"
     log "Alternatively, you may manually enter the following secret into"
-    log "your 2FA device:"
+    log "your OTP device:"
     log "    $human_readable_secret"
 
     if timedatectl status | grep -q 'RTC in local TZ: yes'; then
@@ -218,7 +284,7 @@ if twofa && [ ! -e "$AEM_DIR/$LABEL/secret.otp" ]; then
 
     # check whether secret was provisioned correctly
     log ""
-    log "After you have set up your 2FA device, please enter the code"
+    log "After you have set up your OTP device, please enter the code"
     log "displayed on your device and press <ENTER> to continue."
     log ""
 
@@ -241,28 +307,55 @@ if twofa && [ ! -e "$AEM_DIR/$LABEL/secret.otp" ]; then
         fi
     done
 
-    log "2FA code matches, continuing AEM setup."
+    log "TOTP code matches, continuing AEM setup."
 fi
 
-# 2FA: generate and enroll a LUKS key file if not already present
+# MFA: generate and enroll a LUKS key file if not already present
 
-if twofa && [ ! -e "$AEM_DIR/$LABEL/secret.key" ]; then
-    log "Generating new LUKS key file"
-    rawkey=$(mktemp)
-    head -c 64 /dev/random > "$rawkey"
+if mfa; then
+    if [ -n "$SPLIT_DEV" ]; then
+        KEY_PATH="$AEM_DIR/$SPLIT_LABEL/secret.key"
+    else
+        KEY_PATH="$AEM_DIR/$LABEL/secret.key"
+    fi
 
-    log "Encrypting key file"
-    mkdir -p "$AEM_DIR/$LABEL"
-    scrypt enc "$rawkey" "$AEM_DIR/$LABEL/secret.key"
+    if [ ! -e "$KEY_PATH" ]; then
+        log "Generating new LUKS key file"
+        rawkey=$(mktemp)
+        head -c 64 /dev/random > "$rawkey"
 
-    for dev in $(getluksuuids); do
-        devname=$(readlink -f "/dev/disk/by-uuid/$dev")
-        log "Adding key file to new key slot for $devname (UUID $dev)"
-        cryptsetup luksAddKey "/dev/disk/by-uuid/$dev" "$rawkey"
-    done
+        log "Encrypting key file"
+        mkdir -p "$(dirname "$KEY_PATH")"
+        scrypt enc "$rawkey" "$KEY_PATH"
 
-    log "Shredding the unencrypted key file"
-    shred -zu "$rawkey"
+        for dev in $(getluksuuids); do
+            devname=$(readlink -f "/dev/disk/by-uuid/$dev")
+
+            # check if LUKS device has any free key slots
+            # FIXME: possibility of failing due to i18n?
+            if ! cryptsetup luksDump "/dev/disk/by-uuid/$dev" \
+                    | grep -q DISABLED; then
+                log "FATAL: Device $devname (UUID $dev) has no free key slots!"
+                exit 1
+            fi
+
+            log "Adding key file to new key slot for $devname (UUID $dev)"
+            for try in 1 2 3; do
+                if cryptsetup luksAddKey "/dev/disk/by-uuid/$dev" "$rawkey"; then
+                    break
+                elif [ $try -eq 3 ]; then
+                    log "ERROR: Wrong password, aborting!"
+                    log "You need to manually finish enrolling $rawkey"
+                    log "as a key file for all desired LUKS devices, then"
+                    log "remove the $rawkey file and re-run this script."
+                    exit 1
+                fi
+            done
+        done
+
+        log "Shredding the unencrypted key file"
+        shred -zu "$rawkey"
+    fi
 fi
 
 
@@ -280,11 +373,29 @@ else
 fi
 
 
+# mount split-MFA (cannot be already mounted since we always reformat)
+if mfa && [ -n "$SPLIT_DEV" ]; then
+    SPLIT_MNT=/mnt/anti-evil-maid/$SPLIT_LABEL
+    log "Mounting split-MFA at $SPLIT_MNT"
+    mkdir -p "$SPLIT_MNT"
+    mount "$SPLIT_DEV" "$SPLIT_MNT"
+fi
+
+
 # sync
 
 mkdir -p "$PART_MNT/aem"
 synctpms "$LABEL" "$PART_MNT"
 mkdir -p "$AEM_DIR/$LABEL"
+
+
+# sync split-MFA
+
+if mfa && [ -n "$SPLIT_DEV" ]; then
+    mkdir -p "$SPLIT_MNT/aem"
+    synctpms "$SPLIT_LABEL" "$SPLIT_MNT"
+    # mkdir -p "$AEM_DIR/$SPLIT_LABEL" not needed here
+fi
 
 
 # make device bootable
@@ -329,4 +440,9 @@ fi
 if [ -z "$CUR_MNT" ]; then
     log "Unmounting $PART_MNT"
     umount "$PART_MNT"
+fi
+
+if mfa && [ -n "$SPLIT_DEV" ]; then
+    log "Unmounting $SPLIT_DEV"
+    umount "$SPLIT_DEV"
 fi

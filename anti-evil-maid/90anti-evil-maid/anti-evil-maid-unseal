@@ -1,7 +1,4 @@
 #!/bin/bash
-
-. /lib/dracut-lib.sh
-
 set -e -o pipefail
 shopt -s expand_aliases
 
@@ -115,24 +112,22 @@ sealed_secret_otp=$TPM_DIR/$LABEL/secret.otp.sealed2
 
 if [ -e "$sealed_secret_otp" ]; then
     if ! external "$DEV" || ! removable "$DEV"; then
-        message "2FA AEM device not external/removable, aborting!"
+        # evil maid can gain access to OTP secret, don't trust it
+        message "Multi-factor AEM device not external/removable, aborting!"
         exit 1
     fi
 
-    alias twofa=true
+    alias otp=true
     SEALED_SECRET=$sealed_secret_otp
 
     if [ -e "$sealed_secret_key" ]; then
-        alias split_twofa=false
+        alias split_key=false
     else
-        # TODO: implement
-        alias split_twofa=true
-        message "Split 2FA AEM not yet supported!"
-        exit 1
+        alias split_key=true
     fi
 else
-    alias twofa=false
-    alias split_twofa=false
+    alias otp=false
+    alias split_key=false
 fi
 
 mkdir -p "$CACHE_DIR"
@@ -158,7 +153,7 @@ else
     done
 fi
 
-if twofa; then
+if otp; then
     log "Unsealing TOTP shared secret seed..."
     if tpm_unsealdata $Z -i "$SEALED_SECRET" -o "$UNSEALED_SECRET" \
             < "$SRK_PASSWORD_CACHE"; then
@@ -166,10 +161,10 @@ if twofa; then
         log "TOTP secret unsealed."
         seed=$(cat "$UNSEALED_SECRET")
 
-        message "Please verify your 2FA device displays the same TOTP code"
+        message "Please verify your OTP device displays the same TOTP code"
         message "as shown below. Should the codes match, press <ENTER> to"
         message "unseal your LUKS key file. If you do now have access to"
-        message "your 2FA device but wish to continue despite the security"
+        message "your OTP device but wish to continue despite the security"
         message "implications, press <ENTER>. Pressing <Q> will revert"
         message "back to displaying PNG/TXT secret (if provisioned)."
         message "Otherwise, shut down the computer."
@@ -177,9 +172,9 @@ if twofa; then
         message "[ $(date) ] TOTP code: $(oathtool --totp -b "$seed")"
 
         if plymouth_active; then
-            plymouth watch-keystroke --keys=$'\n' --command='touch /tmp/2fa-cont' &
-            plymouth watch-keystroke --keys=Qq --command='touch /tmp/2fa-skip' &
-            while [ ! -e /tmp/2fa-cont ] && [ ! -e /tmp/2fa-skip ]; do
+            plymouth watch-keystroke --keys=$'\n' --command='touch /tmp/mfa-cont' &
+            plymouth watch-keystroke --keys=Qq --command='touch /tmp/mfa-skip' &
+            while [ ! -e /tmp/mfa-cont ] && [ ! -e /tmp/mfa-skip ]; do
                 now=$(date +%s)
                 if [ "$((now % 30))" -eq 0 ] && [ ! "$last" == "$now" ]; then
                     message "[ $(date) ] TOTP code: $(oathtool --totp -b "$seed")"
@@ -189,22 +184,22 @@ if twofa; then
                 fi
             done
 
-            if [ -e /tmp/2fa-skip ]; then
-                alias twofa=false
-		message "Reverting back to non-2FA AEM boot"
+            if [ -e /tmp/mfa-skip ]; then
+                alias otp=false
+                message "Reverting back to non-multi-factor AEM boot"
             fi
-            rm -f /tmp/2fa-{cont,skip}
+            rm -f /tmp/mfa-{cont,skip}
         else
             tout=$((30 - ($(date +%s) % 30)))
             while true; do
                 if systemd-ask-password --echo --timeout "$tout" \
-                        "Press <ENTER> to continue or <Q> + <ENTER> to skip 2FA." \
-                        >/tmp/2fa-resp; then
-                    if grep -qi q /tmp/2fa-resp; then
-                        alias twofa=false
-		        message "Reverting back to non-2FA AEM boot"
+                        "Press <ENTER> to continue or <Q> + <ENTER> to skip multi-factor AEM." \
+                        >/tmp/mfa-resp; then
+                    if grep -qi q /tmp/mfa-resp; then
+                        alias otp=false
+                        message "Reverting back to non-multi-factor AEM boot"
                     fi
-                    rm -f /tmp/2fa-resp
+                    rm -f /tmp/mfa-resp
                     break
                 fi
 
@@ -219,9 +214,73 @@ fi
 
 
 alias png=false
-if twofa; then
-    # user does not want to skip 2FA
-    SEALED_SECRET=$sealed_secret_key
+if otp; then
+    # user does not want to skip multi-factor AEM
+    if ! split_key; then
+        SEALED_SECRET=$sealed_secret_key
+    else
+        # unmount the first multi-factor AEM media
+        log "Unmounting the $LABEL device..."
+        umount "$MNT"
+
+        # prompt the user to physically remove first MFA AEM dev
+        # this is safe to do as no re-sealing on boot should occur
+        # (since user approved TOTP code)
+        waitfor ! -b "$DEV"
+
+        # wait for insertion of second MFA AEM dev
+        GLOB=/dev/disk/by-label/$SPLIT_LABEL_PREFIX*
+        MSG="Waiting for $GLOB to be connected..."
+
+        plymouth pause-progress
+        while :; do
+            n=$(lsblk -nr -o PARTLABEL,LABEL | grep -cE "(^| )$SPLIT_LABEL_PREFIX") || true
+            case "$n" in
+                0)
+                    if [ -n "$MSG" ]; then
+                        message "$MSG"
+                        MSG=
+                    fi
+                    sleep 0.1
+                ;;
+
+                1)
+                    DEV=($GLOB)
+                    if [ -z "$MSG" ]; then
+                        message "$DEV connected"
+                    fi
+                    break
+                ;;
+
+                *)
+                    message "Error: found ${n:-?} $GLOB devices!"
+                    exit 1
+                ;;
+            esac
+        done
+        plymouth unpause-progress
+
+        LABEL=${DEV##*/}
+
+        # mount second MFA AEM dev
+        log "Mounting the ${LABEL:?} device..."
+        mkdir -p "$MNT"
+        mount -t ext4 -o ro "$DEV" "$MNT"
+
+        # copy secret(s) from seconds MFA AEM dev
+        cp -Tr "$MNT/aem/${TPMS_DIR##*/}" "${TPMS_DIR}"
+
+        # reconstruct path to sealed key file since $LABEL changed
+        sealed_secret_key=$TPM_DIR/$LABEL/secret.key.sealed2
+
+        # make sure it contains LUKS key file
+        if [ ! -e "$sealed_secret_key" ]; then
+            message "Second multi-factor AEM device does not contain LUKS key file!"
+            exit 1
+        fi
+
+        SEALED_SECRET=$sealed_secret_key
+    fi
 elif plymouth_active && [ -e "$sealed_secret_png" ]; then
     alias png=true
     SEALED_SECRET=$sealed_secret_png
@@ -241,28 +300,24 @@ umount "$MNT"
 
 
 if [ ! -d "$CACHE_DIR" ]; then  # unseal succeeded
-    if twofa; then
+    if otp; then
         # ask for LUKS key file passphrase
         for try in 1 2 3; do
             if systemd-ask-password "LUKS key file password" |
-                    scrypt dec -P "$UNSEALED_SECRET" "$UNSEALED_SECRET.dec"; then
+                    scrypt dec -P "$UNSEALED_SECRET" /tmp/keyfile; then
                 log "Correct LUKS key file password"
-                # TODO: handle discard (TRIM) according to "rd.luks.allow-discards"
-                # TODO: host-only dracut has /etc/crypttab in initramfs, we should
-                #       parse and obey the cryptsetup names & options found there
-                for luksid in $(getluksuuids); do
-                    log "Attempting to unlock $luksid with key file"
-                    waitfor -b "/dev/disk/by-uuid/$luksid"
-                    if cryptsetup open --type luks \
-                            --key-file "$UNSEALED_SECRET.dec" \
-                            "/dev/disk/by-uuid/$luksid" \
-                            "luks-$luksid"; then
-                        message "Unlocked $luksid"
-                    else
-                        message "Failed to unlock $luksid with decrypted key file"
-                    fi
-                done
-                rm -f "$UNSEALED_SECRET.dec" /tmp/aem-cur-luks-name
+                message "Key file decrypted."
+                # decrypted key file saved in /tmp/keyfile;
+                # dracut crypt module which will be called after
+                # this one will parse /etc/crypttab which, if
+                # AEM was set up correctly, will list /tmp/keyfile
+                # as the LUKS key file for encrypted device(s)
+
+                # TODO: `chmod 600 /tmp/keyfile` perhaps?
+                #       other than that, root can always get LUKS
+                #       master key anyway, so deleting this file
+                #       would only add complexity and not solve
+                #       anything
                 break
             else
                 log "Wrong LUKS key file password"
