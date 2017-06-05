@@ -445,4 +445,11 @@ fi
 if mfa && [ -n "$SPLIT_DEV" ]; then
     log "Unmounting $SPLIT_DEV"
     umount "$SPLIT_DEV"
+    log "Upon next boot, please connect the split-MFA device"
+    log "even when AEM secret unsealing fails (as expected)."
+    log "Best moment to do this is when the LUKS passphrase"
+    log "prompt is displayed. Doing to will ensure sealing"
+    log "of split LUKS key file to the split-MFA device."
+    log "Otherwise, you'd have to manually seal after boot"
+    log "or perform yet another reboot."
 fi
