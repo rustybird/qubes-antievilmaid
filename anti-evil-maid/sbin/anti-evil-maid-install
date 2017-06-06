@@ -389,6 +389,10 @@ mkdir -p "$PART_MNT/aem"
 synctpms "$LABEL" "$PART_MNT"
 mkdir -p "$AEM_DIR/$LABEL"
 
+if mfa && [ -n "$SPLIT_DEV" ]; then
+    # store split-MFA label on first AEM dev
+    cp "$AEM_DIR/$LABEL/split-mfa.label" "$PART_MNT/aem/"
+fi
 
 # sync split-MFA
 

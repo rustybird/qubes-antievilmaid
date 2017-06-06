@@ -222,6 +222,14 @@ if otp; then
     if ! split_key; then
         SEALED_SECRET=$sealed_secret_key
     else
+        if [ -e "$MNT/aem/split-mfa.label" ]; then
+            SPLIT_LABEL=$(cat "$MNT/aem/split-mfa.label")
+            SPLIT_DEV="/dev/disk/by-label/$SPLIT_LABEL"
+        else
+            message "No split-MFA device label found, aborting!"
+            exit 1
+        fi
+
         # unmount the first multi-factor AEM media
         log "Unmounting the $LABEL device..."
         umount "$MNT"
@@ -231,44 +239,14 @@ if otp; then
         # (since user approved TOTP code)
         waitfor ! -b "$DEV"
 
-        # wait for insertion of second MFA AEM dev
-        GLOB=/dev/disk/by-label/$SPLIT_LABEL_PREFIX*
-        MSG="Waiting for $GLOB to be connected..."
-
         plymouth pause-progress
-        while :; do
-            n=$(lsblk -nr -o PARTLABEL,LABEL | grep -cE "(^| )$SPLIT_LABEL_PREFIX") || true
-            case "$n" in
-                0)
-                    if [ -n "$MSG" ]; then
-                        message "$MSG"
-                        MSG=
-                    fi
-                    sleep 0.1
-                ;;
-
-                1)
-                    DEV=($GLOB)
-                    if [ -z "$MSG" ]; then
-                        message "$DEV connected"
-                    fi
-                    break
-                ;;
-
-                *)
-                    message "Error: found ${n:-?} $GLOB devices!"
-                    exit 1
-                ;;
-            esac
-        done
+        waitfor -b "$SPLIT_DEV"
         plymouth unpause-progress
 
-        LABEL=${DEV##*/}
-
         # mount second MFA AEM dev
-        log "Mounting the ${LABEL:?} device..."
+        log "Mounting the $SPLIT_LABEL device..."
         mkdir -p "$MNT"
-        mount -t ext4 -o ro "$DEV" "$MNT"
+        mount -t ext4 -o ro "$SPLIT_DEV" "$MNT"
 
         # copy secret(s) from seconds MFA AEM dev
         cp -Tr "$MNT/aem/${TPMS_DIR##*/}" "${TPMS_DIR}"
