@@ -23,20 +23,6 @@ Z=$(tpm_z_srk)
 LABEL=$LABEL_PREFIX${1-$(cat "$SUFFIX_CACHE")}
 DEV=/dev/disk/by-label/$LABEL
 
-message "Checking whether any split-MFA AEM device is connected..."
-unset SPLIT_DEV SPLIT_LABEL
-for splitdev in ${AEM_DIR}/${SPLIT_LABEL_PREFIX}*; do
-    SPLIT_DEV=/dev/disk/by-label/$(basename $splitdev)
-    if [ -b "$SPLIT_DEV" ]; then
-        SPLIT_LABEL=$(basename "$SPLIT_DEV")
-        message "Found split-MFA AEM device: $SPLIT_LABEL"
-        break
-    fi
-done
-
-if [ -z "$SPLIT_DEV" ]; then
-    message "No split-MFA AEM device found."
-fi
 
 # ensure that all standard PCRs configured to be used have been extended
 
@@ -77,7 +63,10 @@ fi
 
 
 # seal and save split-MFA secret(s) to root partition
-if [ -n "$SPLIT_LABEL" ]; then
+unset SPLIT_LABEL
+if [ -e "$AEM_DIR/$LABEL/split-mfa.label" ]; then
+    SPLIT_LABEL=$(cat "$AEM_DIR/$LABEL/split-mfa.label")
+
     message "Sealing split-MFA secrets..."
     mkdir -p "$TPM_DIR/$SPLIT_LABEL"
     SEALED=0
@@ -134,6 +123,7 @@ fi
 
 if [ -n "$SPLIT_LABEL" ]; then
     # mount
+    SPLIT_DEV="/dev/disk/by-label/$SPLIT_LABEL"
     waitfor -b "$SPLIT_DEV"
 
     if CUR_MNT=$(devtomnt "$SPLIT_DEV") && [ -n "$CUR_MNT" ]; then

@@ -315,6 +315,7 @@ fi
 if mfa; then
     if [ -n "$SPLIT_DEV" ]; then
         KEY_PATH="$AEM_DIR/$SPLIT_LABEL/secret.key"
+        echo "$SPLIT_LABEL" > "$AEM_DIR/$LABEL/split-mfa.label"
     else
         KEY_PATH="$AEM_DIR/$LABEL/secret.key"
     fi
