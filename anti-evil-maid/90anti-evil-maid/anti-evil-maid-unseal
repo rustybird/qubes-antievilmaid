@@ -209,6 +209,9 @@ if otp; then
         fi
 
         rm -f "$UNSEALED_SECRET"
+    else
+        # unsealing OTP seed failed, don't even search for keyfile
+        alias otp=false
     fi
 fi
 
