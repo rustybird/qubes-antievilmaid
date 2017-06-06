@@ -30,7 +30,7 @@ for splitdev in ${AEM_DIR}/${SPLIT_LABEL_PREFIX}*; do
     if [ -b "$SPLIT_DEV" ]; then
         SPLIT_LABEL=$(basename "$SPLIT_DEV")
         message "Found split-MFA AEM device: $SPLIT_LABEL"
-	break
+        break
     fi
 done
 
