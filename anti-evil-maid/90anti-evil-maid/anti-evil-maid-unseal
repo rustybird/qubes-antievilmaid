@@ -113,21 +113,14 @@ sealed_secret_otp=$TPM_DIR/$LABEL/secret.otp.sealed2
 if [ -e "$sealed_secret_otp" ]; then
     if ! external "$DEV" || ! removable "$DEV"; then
         # evil maid can gain access to OTP secret, don't trust it
-        message "Multi-factor AEM device not external/removable, aborting!"
+        log "Multi-factor AEM device not external/removable, aborting!"
         exit 1
     fi
 
     alias otp=true
     SEALED_SECRET=$sealed_secret_otp
-
-    if [ -e "$sealed_secret_key" ]; then
-        alias split_key=false
-    else
-        alias split_key=true
-    fi
 else
     alias otp=false
-    alias split_key=false
 fi
 
 mkdir -p "$CACHE_DIR"
@@ -157,7 +150,6 @@ if otp; then
     log "Unsealing TOTP shared secret seed..."
     if tpm_unsealdata $Z -i "$SEALED_SECRET" -o "$UNSEALED_SECRET" \
             < "$SRK_PASSWORD_CACHE"; then
-        SEALED_SECRET=$sealed_secret_key
         log "TOTP secret unsealed."
         seed=$(cat "$UNSEALED_SECRET")
 
@@ -219,49 +211,9 @@ fi
 alias png=false
 if otp; then
     # user does not want to skip multi-factor AEM
-    if ! split_key; then
-        SEALED_SECRET=$sealed_secret_key
-    else
-        if [ -e "$MNT/aem/split-mfa.label" ]; then
-            SPLIT_LABEL=$(cat "$MNT/aem/split-mfa.label")
-            SPLIT_DEV="/dev/disk/by-label/$SPLIT_LABEL"
-        else
-            message "No split-MFA device label found, aborting!"
-            exit 1
-        fi
-
-        # unmount the first multi-factor AEM media
-        log "Unmounting the $LABEL device..."
-        umount "$MNT"
-
-        # prompt the user to physically remove first MFA AEM dev
-        # this is safe to do as no re-sealing on boot should occur
-        # (since user approved TOTP code)
-        waitfor ! -b "$DEV"
-
-        plymouth pause-progress
-        waitfor -b "$SPLIT_DEV"
-        plymouth unpause-progress
-
-        # mount second MFA AEM dev
-        log "Mounting the $SPLIT_LABEL device..."
-        mkdir -p "$MNT"
-        mount -t ext4 -o ro "$SPLIT_DEV" "$MNT"
-
-        # copy secret(s) from seconds MFA AEM dev
-        cp -Tr "$MNT/aem/${TPMS_DIR##*/}" "${TPMS_DIR}"
-
-        # reconstruct path to sealed key file since $LABEL changed
-        sealed_secret_key=$TPM_DIR/$LABEL/secret.key.sealed2
-
-        # make sure it contains LUKS key file
-        if [ ! -e "$sealed_secret_key" ]; then
-            message "Second multi-factor AEM device does not contain LUKS key file!"
-            exit 1
-        fi
-
-        SEALED_SECRET=$sealed_secret_key
-    fi
+    SEALED_SECRET=$sealed_secret_key
+    # not checking key file existence since we DO NOT want
+    # the static secrets to be displayed anyway
 elif plymouth_active && [ -e "$sealed_secret_png" ]; then
     alias png=true
     SEALED_SECRET=$sealed_secret_png
@@ -293,6 +245,14 @@ if [ ! -d "$CACHE_DIR" ]; then  # unseal succeeded
                 # this one will parse /etc/crypttab which, if
                 # AEM was set up correctly, will list /tmp/keyfile
                 # as the LUKS key file for encrypted device(s)
+
+                # alternatively, pass "rd.luks.key=/tmp/keyfile"
+                # on the kernel cmdline for compatibility with
+                # non-hostonly dracut setups
+                # FIXME: systemd < 227 requires a workaround
+                #        for this to work:
+                #          "rd.luks.key=LUKS_UUID=/tmp/keyfile"
+                #        (replace LUKS_UUID with actual value)
 
                 # TODO: `chmod 600 /tmp/keyfile` perhaps?
                 #       other than that, root can always get LUKS

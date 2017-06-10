@@ -62,36 +62,6 @@ if [ "$SEALED" = 0 ]; then
 fi
 
 
-# seal and save split-MFA secret(s) to root partition
-unset SPLIT_LABEL
-if [ -e "$AEM_DIR/$LABEL/split-mfa.label" ]; then
-    SPLIT_LABEL=$(cat "$AEM_DIR/$LABEL/split-mfa.label")
-
-    message "Sealing split-MFA secrets..."
-    mkdir -p "$TPM_DIR/$SPLIT_LABEL"
-    SEALED=0
-    for ext in key; do
-         input=$AEM_DIR/$SPLIT_LABEL/secret.$ext
-        output=$TPM_DIR/$SPLIT_LABEL/secret.$ext.sealed2
-
-        if [ ! -e "$input" ]; then
-            message "Absent $input"
-        elif if [ ! -t 0 ]; then cat "$SRK_PASSWORD_CACHE"; fi |
-                tpm_sealdata $Z $SEAL -i "$input" -o "$output"; then
-            rm -f "${output%2}"
-            SEALED=$((SEALED + 1))
-            message "Sealed $input using $SEAL"
-        else
-            message "Failed $input"
-        fi
-    done
-
-    if [ "$SEALED" = 0 ]; then
-        exit 1
-    fi
-fi
-
-
 # mount device
 
 waitfor -b "$DEV"
@@ -117,34 +87,5 @@ if [ -z "$CUR_MNT" ]; then
     umount "$MNT"
     if external "$DEV" && removable "$DEV"; then
         waitfor ! -b "$DEV"
-    fi
-fi
-
-
-if [ -n "$SPLIT_LABEL" ]; then
-    # mount
-    SPLIT_DEV="/dev/disk/by-label/$SPLIT_LABEL"
-    waitfor -b "$SPLIT_DEV"
-
-    if CUR_MNT=$(devtomnt "$SPLIT_DEV") && [ -n "$CUR_MNT" ]; then
-        MNT=$CUR_MNT
-    else
-        CUR_MNT=
-        MNT=/mnt/anti-evil-maid/$SPLIT_LABEL
-        mkdir -p "$MNT"
-        mount "$SPLIT_DEV" "$MNT"
-    fi
-
-
-    # copy secret(s) to device
-    synctpms "$SPLIT_LABEL" "$MNT"
-
-
-    # unmount device
-    if [ -z "$CUR_MNT" ]; then
-        umount "$MNT"
-        if external "$SPLIT_DEV" && removable "$SPLIT_DEV"; then
-            waitfor ! -b "$SPLIT_DEV"
-        fi
     fi
 fi
