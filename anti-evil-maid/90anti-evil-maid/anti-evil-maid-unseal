@@ -237,28 +237,19 @@ if [ ! -d "$CACHE_DIR" ]; then  # unseal succeeded
         # ask for LUKS key file passphrase
         for try in 1 2 3; do
             if systemd-ask-password "LUKS key file password" |
-                    scrypt dec -P "$UNSEALED_SECRET" /tmp/keyfile; then
+                    scrypt dec -P "$UNSEALED_SECRET" /tmp/aem-keyfile; then
                 log "Correct LUKS key file password"
                 message "Key file decrypted."
-                # decrypted key file saved in /tmp/keyfile;
-                # dracut crypt module which will be called after
-                # this one will parse /etc/crypttab which, if
-                # AEM was set up correctly, will list /tmp/keyfile
-                # as the LUKS key file for encrypted device(s)
+                # decrypted key file saved in /tmp/aem-keyfile;
+                # dracut "90crypt" module will parse the
+                #   rd.luks.key=/tmp/aem-keyfile
+                # kernel cmdline arg and attempt to use it;
+                # this file is deleted on root switch
 
-                # alternatively, pass "rd.luks.key=/tmp/keyfile"
-                # on the kernel cmdline for compatibility with
-                # non-hostonly dracut setups
                 # FIXME: systemd < 227 requires a workaround
                 #        for this to work:
-                #          "rd.luks.key=LUKS_UUID=/tmp/keyfile"
+                #          "rd.luks.key=LUKS_UUID=/tmp/aem-keyfile"
                 #        (replace LUKS_UUID with actual value)
-
-                # TODO: `chmod 600 /tmp/keyfile` perhaps?
-                #       other than that, root can always get LUKS
-                #       master key anyway, so deleting this file
-                #       would only add complexity and not solve
-                #       anything
                 break
             else
                 log "Wrong LUKS key file password"
