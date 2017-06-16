@@ -125,11 +125,7 @@ My secret text
 has two lines
 END
 
-Or, if you prefer, a secret PNG image:
-
-# cp my-secret-image.png /var/lib/anti-evil-maid/aem/secret.png
-
-Note: You are saving these not-yet-sealed secrets to your root
+Note: You are saving this not-yet-sealed secret to your root
 filesystem without further encryption (besides that provided by LUKS).
 If an attacker somehow gains access to your decrypted filesystem data,
 e.g. by compelling you to reveal the LUKS passphrase, they can of
