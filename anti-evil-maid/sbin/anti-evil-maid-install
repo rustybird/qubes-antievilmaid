@@ -1,4 +1,5 @@
 #!/bin/sh -e
+set -e -o pipefail
 export LC_ALL=C
 . anti-evil-maid-lib
 LABEL_SUFFIX_CHARS=0-9a-zA-Z=.-
