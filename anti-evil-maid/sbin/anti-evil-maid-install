@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh -e
 set -e -o pipefail
 export LC_ALL=C
 . anti-evil-maid-lib
