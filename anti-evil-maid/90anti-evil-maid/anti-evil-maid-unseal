@@ -269,7 +269,9 @@ if tpm_unsealdata $Z -i "$SEALED_SECRET" -o "$UNSEALED_SECRET" \
                 # as kernel cmdline arg rd.luks.key does not work
                 # with keys stored in /tmp :(
                 if [ ! -e /etc/crypttab ]; then
+                    set +e
                     . /lib/dracut-lib.sh
+                    set -e
 
                     if discarduuids=$(getargs "rd.luks.allow-discards"); then
                         discarduuids=$(str_replace "$discarduuids" 'luks-' '')
