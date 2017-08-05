@@ -262,11 +262,36 @@ if tpm_unsealdata $Z -i "$SEALED_SECRET" -o "$UNSEALED_SECRET" \
                 log "Correct LUKS key file password"
                 message "Key file decrypted."
                 # decrypted key file saved in /tmp/aem-keyfile;
-                # dracut "90crypt" module will parse the
-                #   rd.luks.key=/tmp/aem-keyfile
-                # kernel cmdline arg and attempt to use it;
-                # this file is deleted on root switch
-                # along with everything in /tmp
+                # now we want the dracut "90crypt" module to parse
+                # /etc/crypttab and find the key file there...
+                # crypttab is not included in non-hostonly
+                # initramfs -- we need to create it ourselves
+                # as kernel cmdline arg rd.luks.key does not work
+                # with keys stored in /tmp :(
+                if [ ! -e /etc/crypttab ]; then
+                    . /lib/dracut-lib.sh
+
+                    if discarduuids=$(getargs "rd.luks.allow-discards"); then
+                        discarduuids=$(str_replace "$discarduuids" 'luks-' '')
+                    elif getargbool 0 rd.luks.allow-discards; then
+                        discarduuids=$(getluksuuids)
+                    fi
+
+                    for luksid in $(getluksuuids); do
+                        # TODO: honor all rd.luks.* options properly
+                        allow_discards=""
+                        if strstr " $discarduuids " " $luksid"; then
+                            allow_discards="discard"
+                        fi
+
+                        opts="$allow_discards"
+
+                        # create entry
+                        echo "luks-$luksid UUID=$luksid /tmp/aem-keyfile $opts" >> /etc/crypttab
+                    done
+                fi
+                # the key file is deleted on root switch
+                # along with everything else in /tmp
                 break
             else
                 log "Wrong LUKS key file password"

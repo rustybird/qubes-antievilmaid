@@ -347,6 +347,15 @@ if mfa && [ ! -e "$AEM_DIR/$LABEL/secret.key" ]; then
                 exit 1
             fi
         done
+
+        if grep "$dev" /etc/crypttab | awk '{print $3}' | grep -qE '^(none|-)$'; then
+            log "Adding key file path to /etc/crypttab for $devname (UUID $dev)"
+            sed -i 's!\([^[:space:]]*[[:space:]]*[^[:space:]]*[[:space:]]*\)[^[:space:]]*\(.*\)!\1/tmp/aem-keyfile\2!' /etc/crypttab
+        else
+            log "WARNING: It seems you already have a key file path listed in"
+            log "/etc/crypttab for LUKS device $devname (UUID $dev)..."
+            log "AEM installer will not overwrite it, please do so manually."
+        fi
     done
 
     log "Shredding the unencrypted key file"
