@@ -28,7 +28,14 @@ trap '_failure $LINENO' ERR
 # define sealing and device variables
 
 source /etc/anti-evil-maid.conf
-Z=$(tpm_z_srk)
+
+if   [ -s "$SRK_PASSWORD_CACHE" ]; then
+    Z=
+elif [ -e "$SRK_PASSWORD_CACHE" ]; then
+    Z=-z
+else
+    Z=$(tpm_z_srk)  # can trigger dictionary attack lock if run too often
+fi
 
 LABEL_SUFFIX=${1-$(cat "$SUFFIX_CACHE")}
 LABEL=$LABEL_PREFIX$LABEL_SUFFIX
