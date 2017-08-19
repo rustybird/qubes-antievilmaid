@@ -188,17 +188,19 @@ if otp; then
 
         seed=$(cat "$UNSEALED_SECRET")
         last=
-        while :; do
+        {
             trap 'plymouth_messages_hide; exit' TERM
-
-            now=$(date +%s)
-            if [ -z "$last" -o "$((now % 30))" = 0 -a "$last" != "$now" ]; then
-                code=$(oathtool --totp -b "$seed")
-                message "[ $(date) ] TOTP code: $code"
-                last=$now
-            fi
-            sleep 0.1
-        done &
+            while :; do
+                now=$(date +%s)
+                if [ -z "$last" ] ||
+                   [ "$((now % 30))" = 0 -a "$last" != "$now" ]; then
+                    code=$(oathtool --totp -b "$seed")
+                    message "[ $(date) ] TOTP code: $code"
+                    last=$now
+                fi
+                sleep 0.1
+            done
+        } &
         totp_loop_pid=$!
 
         if tpm_unsealdata $Z -i "$sealed_secret_key" -o "$UNSEALED_SECRET" \
