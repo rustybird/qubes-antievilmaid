@@ -129,9 +129,8 @@ Android/Apple smartphones (Google Authenticator, FreeOTP Authenticator) and
 Windows Phone (Microsoft Authenticator). You can also use a dedicated hardware
 token, either a reseedable one (letting the AEM installer generate a seed for
 you), or a manufacturer-seeded token (you will need to store the seed in
-/var/lib/anti-evil-maid/aem<suffix>/secret.otp in base32 format without spaces
-removing any trailing "=" characters, then run the AEM installer). The command
-to set this all up is simple:
+/var/lib/anti-evil-maid/aem<suffix>/secret.otp in base32 format, then run the
+AEM installer). The command to set this all up is simple:
 
 # anti-evil-maid-install -m /dev/sdb1
 
@@ -253,9 +252,9 @@ you can boot the system before the attacker can get to it:
 * `. /usr/sbin/anti-evil-maid-lib` (note the dot at the beginning)
 * `revokefreshness <suffix>` (where `<suffix>` is the missing label suffix)
 
-In case you do not remember the used media label suffix, they're all stored
-in `/var/lib/anti-evil-maid/tpm-freshness-db`. If the particular media had
-no special suffix set, use `revokefreshness ""`.
+In case you do not remember the used media label suffix, take a look at
+`/var/lib/anti-evil-maid/`. If the particular media had no special suffix set
+(i.e. if the subdirectory is just named `aem`), use `revokefreshness ""`.
 
 Alternatively, `resetfreshness` will wipe all freshness tokens from the TPM
 (thus invalidating all enrolled AEM media and forcing you to boot an
