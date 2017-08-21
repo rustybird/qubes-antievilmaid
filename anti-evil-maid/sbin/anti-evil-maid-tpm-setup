@@ -10,8 +10,13 @@ if ! [ $# = 0 -o $# = 1 -a "$1" = "-z" ]; then
     exit 1
 fi
 
+if [ "$(id -ur)" != 0 ]; then
+    log "This command must be run as root!"
+    exit 1
+fi
+
 if [ "$(cat /sys/class/tpm/tpm0/owned)" != 0 ]; then
-    log "You must reset/clear your TPM chip first."
+    log "You must reset/clear your TPM chip first!"
     exit 1
 fi
 
@@ -35,11 +40,14 @@ if [ $# = 0 ]; then  # set an SRK password
     lines+=( "$srkpw" "$srkpw" )
 fi
 
-log "Taking ownership of the TPM..."
-printf '%s\n' "${lines[@]}" | notty tpm_takeownership "$@"
-echo >&2
-echo "$OWNERPW" >"$AEM_DIR"/tpm-owner-pw
 systemctl restart tcsd
+
+log "Taking ownership of the TPM..."
+printf '%s\n' "${lines[@]}" |
+notty env LC_ALL=C tpm_takeownership "$@" 2> >(grep -vF "Confirm password:" >&2)
+
+echo "$OWNERPW" >"$TPM_OWNER_PASSWORD_FILE"
+
 
 # - generate NVRAM ID
 
@@ -49,7 +57,8 @@ if [[ $(tpm_id 2>/dev/null) == "unknown" ]]; then
     log "Creating TPM ID..."
     tpm_id_index=$(tpm_id -i)
     # create a 20-byte write-once NVRAM area
-    tpm_nvdefine -i "$tpm_id_index" -s 20 -p "WRITEDEFINE|WRITEALL" "$OWNERPW"
+    tpm_nvdefine -i "$tpm_id_index" -s 20 -p "WRITEDEFINE|WRITEALL" \
+                 --pwdo="$OWNERPW"
     # generate a random ID and write it into NVRAM
     head -c 20 /dev/random | tpm_nvwrite_stdin -i "$tpm_id_index" -s 20
     # lock the area to prevent non-owners from changing ID
