@@ -32,25 +32,29 @@ plymouth_messages_hide() {
 
 # find AEM device
 
+UUID=$(getparams aem.uuid)
+DEV=/dev/disk/by-uuid/$UUID
+
 udevadm trigger
 udevadm settle
+waitfor -b "$DEV"
 
-BOOT_DEV="/dev/disk/by-uuid/$(getbootdevuuid)"
-waitfor -b "$BOOT_DEV"
+n=$(lsblk -nr -o UUID | grep -Fixc "$UUID") || true
+if [ "$n" != 1 ]; then
+    message "Error: found ${n:-?} devices with UUID $UUID"
+    exit 1
+fi
 
-
-# make sure the fs label starts with $LABEL_PREFIX
-
-LABEL=$(lsblk -dnr -o LABEL "$BOOT_DEV")
-if [[ ! "$LABEL" =~ ^$LABEL_PREFIX.* ]]; then
-    log "AEM boot device $BOOT_DEV has wrong label: $LABEL"
+LABEL=$(lsblk -dnr -o LABEL "$DEV")
+if [[ "$LABEL" != "$LABEL_PREFIX"* ]]; then
+    message "AEM boot device $DEV has wrong label: $LABEL"
     exit 1
 fi
 
 
 # mount AEM device
 
-log "Mounting the ${LABEL:?} device..."
+log "Mounting $DEV (\"$LABEL\")..."
 mkdir -p "$MNT"
 mount -t ext4 -o ro "$DEV" "$MNT"
 
@@ -74,7 +78,7 @@ SEALED_SECRET_FSH=$TPM_DIR/$LABEL/secret.fsh.sealed2
 
 # unmount AEM device
 
-log "Unmounting the $LABEL device..."
+log "Unmounting $DEV (\"$LABEL\")..."
 umount "$MNT"
 
 if [ "$(blockdev --getro "$DEV")" = 1 ]; then
@@ -158,6 +162,7 @@ if otp; then
             < "$SRK_PASSWORD_CACHE"; then
         log "TOTP secret unsealed."
 
+        message ""
         message "Never type in your key file password unless the code below is correct!"
         message ""
 
