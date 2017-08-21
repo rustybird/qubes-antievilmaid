@@ -35,12 +35,14 @@ if [ $# = 0 ]; then  # set an SRK password
     lines+=( "$srkpw" "$srkpw" )
 fi
 
+systemctl restart tcsd
+
 log "Taking ownership of the TPM..."
 printf '%s\n' "${lines[@]}" |
 notty env LC_ALL=C tpm_takeownership "$@" 2> >(grep -vF "Confirm password:" >&2)
 
 echo "$OWNERPW" >"$AEM_DIR"/tpm-owner-pw
-systemctl restart tcsd
+
 
 # - generate NVRAM ID
 
