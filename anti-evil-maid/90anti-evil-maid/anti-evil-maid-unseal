@@ -73,7 +73,7 @@ tcsd
 SEALED_SECRET_TXT=$TPM_DIR/$LABEL/secret.txt.sealed2
 SEALED_SECRET_KEY=$TPM_DIR/$LABEL/secret.key.sealed2
 SEALED_SECRET_OTP=$TPM_DIR/$LABEL/secret.otp.sealed2
-SEALED_SECRET_FSH=$TPM_DIR/$LABEL/secret.fsh.sealed2
+SEALED_SECRET_FSH=$TPM_DIR/$LABEL/secret.fre.sealed2
 
 
 # unmount AEM device
