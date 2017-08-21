@@ -142,7 +142,7 @@ fi
 if checkfreshness "$UNSEALED_SECRET"; then
     log "Freshness token valid, continuing."
 else
-    message "Freshness token invalid!"
+    log "Freshness token invalid!"
     exit 1
 fi
 

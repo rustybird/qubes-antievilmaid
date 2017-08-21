@@ -1,4 +1,5 @@
 LABEL_PREFIX=aem
+SYSFS_TPM_DIR=/sys/class/tpm/tpm0
 AEM_DIR=/var/lib/anti-evil-maid
 TPM_DIR=/var/lib/tpm
 TPMS_DIR=${TPM_DIR}s
@@ -45,11 +46,11 @@ log() {
 }
 
 hex() {
-    od -A n -v -t x1 | tr -dc 0-9a-f
+    xxd -ps | tr -dc 0-9a-f
 }
 
 unhex() {
-    tr -dc 0-9a-f | sed 's/\(..\)/\\x\1/g' | xargs -0 printf
+    tr -dc 0-9a-f | xxd -ps -r
 }
 
 waitfor() {
@@ -179,7 +180,7 @@ updatefreshness() {
     fi
 
     _pw=$(cat "$TPM_FRESHNESS_PASSWORD_FILE")
-    sha1sum "$1" | cut -d ' ' -f 1 | xxd -r -ps \
+    sha1sum "$1" | cut -d ' ' -f 1 | unhex \
     | tpm_nvwrite_stdin -i "$TPM_FRESHNESS_INDEX" \
       -n "$((_slot * 20))" -s 20 --password="$_pw"
 }
