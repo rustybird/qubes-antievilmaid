@@ -36,8 +36,9 @@ if [ $# = 0 ]; then  # set an SRK password
 fi
 
 log "Taking ownership of the TPM..."
-printf '%s\n' "${lines[@]}" | notty tpm_takeownership "$@"
-echo >&2
+printf '%s\n' "${lines[@]}" |
+notty env LC_ALL=C tpm_takeownership "$@" 2> >(grep -vF "Confirm password:" >&2)
+
 echo "$OWNERPW" >"$AEM_DIR"/tpm-owner-pw
 systemctl restart tcsd
 
