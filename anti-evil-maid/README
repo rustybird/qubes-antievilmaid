@@ -34,7 +34,7 @@ required dependencies and tools.
 
 b) Verify kernel support for TPM:
 
-# cat /sys/devices/*/*/pcrs
+# cat /sys/class/tpm/tpm0/pcrs
 
 If you see something like this:
 
@@ -47,22 +47,24 @@ PCR-04: 93 33 4E 81 A6 9C 80 54 D6 87 C7 FD 76 7C 6F 4C 70 FC C6 73
 
 ... then your TPM is supported by your kernel.
 
-3) Take ownership of your TPM. This, among other things, would generate
-the TPM SRK key used for sealing process:
-
-# systemctl restart tcsd
-# tpm_takeownership -y -z
-
-You may want to use non-default password for the SRK key (see the discussion in
-the article referenced above), certainly if you want to save the sealed secrets
-to your internal boot partition. In that case you SHOULD NOT pass the '-z'
-argument to tpm_takeownership.
-
 If your tpm has already been owned in the past, you can reset it by running
 tpm_clear -z, powering your computer off, and then resetting TPM in the BIOS
 (e.g.: TPM Authentication Reset).
 
-4) Setup Anti Evil Maid
+c) Initialize the TPM for use with AEM
+
+# anti-evil-maid-tpm-setup -z
+
+In case you want to install AEM to an internal disk, an SRK password must
+be set up in order for AEM to be secure. The SRK password can be set up
+by NOT passing the "-z" option to the above command. Should you not
+anticipate future need for internal AEM boot device and want to use
+external media only, use the "-z" option. If you later decide to provision
+AEM on the internal drive, re-run "anti-evil-maid-setup" (without "-z").
+This will invalidate sealed secrets on all existing external AEM media
+(so make sure to boot from each one of them in order to re-seal secrets).
+
+3) Setup Anti Evil Maid
 
 a) SINIT module
 
@@ -71,10 +73,18 @@ You should download the SINIT module required for your system.
 Intel documented the required SINIT module depending on your CPU platform in:
 http://software.intel.com/en-us/articles/intel-trusted-execution-technology
 
-You can then download the module and unzip it. All the modules can be downloaded
-from:
+You can then download the module and unzip it. All the modules can be
+downloaded from:
 
 https://software.intel.com/protected-download/267276/183305
+
+Also, make sure you have the latest RACM update, if available (2nd & 3rd gen):
+https://software.intel.com/system/files/article/183305/intel-txt-sinit-acm-revocation-tools-guide-rev1-0_2.pdf
+
+It's possible to use 3rd gen SINIT/RACM on 2nd gen platforms. In fact, the
+only RACM available at the time of writing is for the 3rd gen, while the 2nd
+gen platforms were also affected by the buffer overflow bug in old SINIT
+version.
 
 Finally, you should retrieve the BIN file inside /boot in dom0. E.g., run from
 dom0:
@@ -84,14 +94,28 @@ $ sudo -s
 
 NOTE: The SINIT files are digitally signed by Intel. While there is no easy
 way to verify their integrity after downloading (and after copying to Dom0),
-still, the operation of placing such a file into Dom0's /boot filesystem should
-be reasonably safe to do -- after all the file should not be processed by any
-software in Dom0, and only by the SENTER instruction of the processes, which,
-we hope, correctly verifies the signature before executing it...
+still, the operation of placing such a file into Dom0's /boot filesystem
+should be reasonably safe to do -- after all the file should not be processed
+by any software in Dom0, and only by the SENTER instruction of the processes,
+which, we hope, correctly verifies the signature before executing it...
 
 b) Create an Anti Evil Maid device:
 
 # anti-evil-maid-install -h
+
+Please note that each AEM device you provision should have a unique
+filesystem label suffix (use the '-s' option). You may safely re-use
+suffixes for destroyed devices.
+
+Installation directly onto a (truly) read-only media (such as a CD-R) is not
+supported. You can, however, copy the contents of an existing RW media onto
+RO media after the initial sealing takes place. Physical write-protect
+switches on SD cards or USB sticks are fine (install AEM in RW mode, then
+flip the switch and proceed to use as RO media). Remember to always pull
+out the RO media when your text secret or TOTP code is displayed! Failing
+to do that will result in invalidation of freshness token in the TPM memory
+and the AEM media will fail to perform verified boot next time, falling
+back to non-AEM-protected mode.
 
 For example, to install on the internal boot partition (assuming that it
 is /dev/sda1):
@@ -102,14 +126,50 @@ Or better, create an external AEM boot device (in this case an SD card):
 
 # anti-evil-maid-install /dev/mmcblk0p1
 
-If you've chosen the latter option, you should then remove the internal
-boot partition from dom0's /etc/fstab, never mount it again in dom0, and
-never boot from it again, because an attacker might modify it to exploit
-GRUB or dom0 filesystem drivers.
+Alternatively, a multi-factor authentication AEM boot device can be created,
+which provides additional protection against shoulder surfing and video
+surveillance -- with the above setups, if an attacker sees your disk
+encryption password as you're typing it then they can simply steal and decrypt
+your computer. Long story short, if you ever need to boot your AEM-protected
+computer in public or anywhere a camera may be hidden, this is the thing you
+want to use. However, this setup requires an external boot media (eg. USB
+stick or memory card) for maximum protection and owning a suitable two-factor
+authentication device supporting time-based one-time passwords (TOTP). There
+are apps available for Android/Apple smartphones (Google Authenticator,
+FreeOTP Authenticator) and Windows Phone (Microsoft Authenticator). You can
+also use a dedicated hardware token, either a reseedable one (letting the AEM
+installer generate a seed for you), or a manufacturer-seeded token (you will
+need to store the seed in /var/lib/anti-evil-maid/aem<suffix>/secret.otp in
+base32 format, then run the AEM installer). The command to set this all up is
+simple:
 
-Note: If you choose to use a USB device (e.g., a flash drive) as your AEM device
-and you previously created a USB qube, then you may have to unhide your USB
-controller from dom0:
+# anti-evil-maid-install -m /dev/sdb1
+
+This will automatically generate a TOTP seed and display it as a QR code for
+you to enroll on your 2FA device (if it doesn't have a camera, there's also
+text version for manual entry). Once a successful TOTP seed enrollment is
+verified (you need to enter the 6-digit code displayed on your 2FA device),
+a LUKS key file will be randomly generated and encrypted by a password of
+your choice (make sure you're not using this password for anything else).
+This key file will then get added to your encrypted drive's LUKS key slot.
+For more details, see the associated qubes-devel mailing list thread:
+  https://groups.google.com/d/topic/qubes-devel/8cAjSyg1msM/discussion
+
+In case you would like to install multi-factor AEM on internal disk, beware
+that keyboard observation attacks cannot be prevented! Plus, you still need
+to have TPM SRK password set. The only advantage over plain static text secret
+is, of course, that there's not static secret **shown on the screen** to
+observe (ie. cover the keyboard while typing AEM passwords).
+
+If you've chosen to install AEM on an external device (and not the internal
+drive), you should then remove the internal boot partition from dom0's
+/etc/fstab, never mount it again in dom0, and never boot from it again,
+because an attacker might modify it to exploit GRUB or dom0 filesystem
+drivers.
+
+Note: If you choose to use a USB device (e.g., a flash drive) as your AEM
+device and you previously created a USB qube, then you may have to unhide
+your USB controller from dom0:
 
   1. Open the file `/etc/default/grub` in dom0.
   2. Find the line that begins with `GRUB_CMDLINE_LINUX`.
@@ -120,33 +180,32 @@ controller from dom0:
 
 c) Create a secret text (note: it cannot be larger than 255 bytes):
 
+Note: This step is unnecessary if using the multi-factor auth setup, but
+can serve as a fallback option in case you ever find yourself temporarily
+not having access to your 2FA device (eg. smartphone or hardware TOTP token).
+
 # cat >/var/lib/anti-evil-maid/aem/secret.txt <<END
 My secret text
 has two lines
 END
 
-Or, if you prefer, a secret PNG image:
-
-# cp my-secret-image.png /var/lib/anti-evil-maid/aem/secret.png
-
-Note: You are saving these not-yet-sealed secrets to your root
+Note: You are saving this not-yet-sealed secret to your root
 filesystem without further encryption (besides that provided by LUKS).
 If an attacker somehow gains access to your decrypted filesystem data,
 e.g. by compelling you to reveal the LUKS passphrase, they can of
 course see these secrets. So they are probably not the right place to
 store your most intimate confessions. ;)
 
-5) Reboot the system, choose one of the entries called "AEM Qubes". This will
+4) Reboot the system, choose one of the entries called "AEM Qubes". This will
 attempt to perform a "measured launch" using tboot and the SINIT module you
 downloaded, which records the Xen, kernel, and initrd versions used in PCRs
 17-19 of the TPM for use in sealing and unsealing your secret. If the measured
-launch fails for any reason, tboot will fall back to a normal boot and AEM will
-not function.
+launch fails for any reason, tboot will fall back to a normal boot and AEM
+will not function.
 
-a) Enter your SRK password if prompted in case you have set one in step
-3. You won't see your secret afterwards, because it hasn't been sealed
-yet. Enter your disk decryption passphrase anyway, right now you still
-trust your system.
+a) Enter your SRK password if prompted. You won't see your secret afterwards,
+because it hasn't been sealed yet. Enter your disk decryption passphrase
+anyway, right now you still trust your system.
 
 As the system continues booting, AEM will automatically seal your
 secret(s). You should see a line, or multiple lines, like this one:
@@ -164,10 +223,11 @@ them and you want to reseal immediately, run anti-evil-maid-seal manually
 once.
 
 If you get a message that the "PCR sanity check failed" and you are sure you
-have saved the right SINIT blob in step 4.a, then check the tboot log for
-details. The easiest way to view it is to set "logging=vga vga_delay=10" on the
-"multiboot /tboot.gz" line in grub.cfg and reboot. For more information, see
-the tboot readme (/usr/share/doc/tboot/README on an installed system).
+have saved the right SINIT blob in step 3.a, then check the tboot log for
+details. The easiest way to view it is to set "logging=vga vga_delay=10" on
+the "multiboot /tboot.gz" line in grub.cfg and reboot. Alternatively, run
+`sudo txt-stat` from dom0. For more information, see the tboot readme
+(/usr/share/doc/tboot/README on an installed system).
 
 b) If a chunk of your installed RAM seems to be missing after the reboot
 (which can be checked by running "xl info" in dom0), do the following:
@@ -175,13 +235,13 @@ b) If a chunk of your installed RAM seems to be missing after the reboot
 # echo 'export GRUB_CMDLINE_TBOOT=min_ram=0x2000000' >>/etc/default/grub
 # grub2-mkconfig -o /boot/grub2/grub.cfg
 
-Then go to step 5.a again. A discussion of this problem can be found at
+Then go to step 4.a again. A discussion of this problem can be found at
 http://thread.gmane.org/gmane.comp.boot-loaders.tboot.devel/610/focus=611
 and by searching for "min_ram" in the qubes mailing lists.
 
 c) Now, every time you boot your system (from your Anti Evil Maid stick)
-you should see your secret text/image displayed *before* you enter your
-LUKS disk encryption passphrase.
+you should see your secret text or TOTP code displayed *before* you
+enter your LUKS disk encryption or key file passphrase.
 
 Xen/kernel/BIOS/firmware upgrades
 ==================================
@@ -189,7 +249,80 @@ Xen/kernel/BIOS/firmware upgrades
 After Xen, kernel, BIOS, or firmware upgrades, you will need to reboot
 and enter your disk decryption passphrase even though you can't see your
 secret. It will be resealed again automatically later in the boot process
-(see step 5.a).
+(see step 4.a).
+
+
+What to do in case of compromise
+================================
 
 For a discussion of potential attacks against Anti Evil Maid, see the article
 referenced at the beginning.
+
+
+AEM media copied/stolen by an attacker
+--------------------------------------
+
+If you have your system up and running or have an extra AEM media using which
+you can boot the system before the attacker can get to it:
+
+* `sudo -s` in dom0
+* `. /usr/sbin/anti-evil-maid-lib` (note the dot at the beginning)
+* `revokefreshness <suffix>` (where `<suffix>` is the missing label suffix)
+
+In case you do not remember the used media label suffix, take a look at
+`/var/lib/anti-evil-maid/`. If the particular media had no special suffix set
+(i.e. if the subdirectory is just named `aem`), use `revokefreshness ""`.
+
+Alternatively, `resetfreshness` will wipe all freshness tokens from the TPM
+(thus invalidating all enrolled AEM media and forcing you to boot an
+unverified system).
+
+As a last resort, you can attempt to reset the TPM from BIOS (with similar
+effect to `resetfreshness`). Otherwise, it's game over.
+
+
+Someone saw my LUKS passphrase
+------------------------------
+
+You should've installed AEM in multi-factor mode.
+
+If you're fairly confident the attacker does not possess a bitwise copy
+of your encrypted Qubes OS drive, change the LUKS passphrase:
+
+* determine the path to LUKS-encrypted disk (usually /dev/sda2)
+* add a new password with `sudo cryptsetup luksAddKey <disk>`
+* remove old one with `sudo cryptsetup luksRemoveKey <disk>`
+
+As these actions will change the LUKS header, which is fed into one
+of the TPM PCRs upon each AEM boot, all the existing AEM media will
+get invalidated (ie. fall back to unverified boot).
+
+Beware that solid-state devices will most likely NOT overwrite the
+LUKS header, but rather write the new one into another memory cell
+(due to wear leveling algorithms designed to prolong SSD life).
+If you're worried about this and have recent-enough backups (as
+you always should), perform an ATA secure erase of the whole SSD
+using a live CD and then reinstall Qubes OS.
+https://ata.wiki.kernel.org/index.php/ATA_Secure_Erase
+
+
+Someone saw my text secret
+--------------------------
+
+Again, if you're going to boot your Qubes OS in public places,
+using multi-factor AEM is strongly recommended.
+
+Assuming the attacker haven't yet had access to your computer
+(in order to install a compromised bootloader which will show
+the correct secret but record your LUKS passphrase), simply
+changing the text secret and re-creating affected AEM media
+(if you used same secret for multiple ones) will do.
+
+The text secrets are stored in
+`/var/lib/anti-evil-maid/aem<suffix>/secret.txt`
+
+Make sure to never trust the old text secret ever again!
+
+
+
+TODO: write up more scenarios and how to recover, best practices

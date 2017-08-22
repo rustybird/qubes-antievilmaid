@@ -1,12 +1,12 @@
 #!/bin/bash
-set -e -o pipefail
+set -e -o pipefail -o errtrace
 shopt -s expand_aliases
 
 # Listing tcsd.service in anti-evil-maid-seal.service's Requires= and After=
 # would cause it to always be started (even when not booting in AEM mode or
 # when sealing is unnecessary) due to the way systemd evaluates conditions.
-# Putting the systemctl command in ExecStartPre= is also insufficient: The user
-# might want to run this script manually after changing the secret(s).
+# Putting the systemctl command in ExecStartPre= is also insufficient: The
+# user might want to run this script manually after changing the secret(s).
 
 systemctl start tcsd
 
@@ -15,20 +15,36 @@ source anti-evil-maid-lib
 trap 'rm -rf "$CACHE_DIR"' EXIT
 
 
+# scream loudly if sealing fails for some reason
+# (eg. AEM media read-only)
+_failure() {
+    message "Failed to seal secrets (error @ line $1)!"
+    waitforenter
+    exit 1
+}
+trap '_failure $LINENO' ERR
+
+
 # define sealing and device variables
 
 source /etc/anti-evil-maid.conf
+notty tpm_resetdalock <"$TPM_OWNER_PASSWORD_FILE" || true
 Z=$(tpm_z_srk)
+LABEL_SUFFIX=${1-$(cat "$SUFFIX_CACHE")}
+LABEL=$LABEL_PREFIX$LABEL_SUFFIX
 
-LABEL=$LABEL_PREFIX${1-$(cat "$SUFFIX_CACHE")}
-DEV=/dev/disk/by-label/$LABEL
+case $# in
+    0) DEV=/dev/disk/by-uuid/$(getparams aem.uuid) ;;
+    1) DEV=/dev/disk/by-label/$LABEL ;;
+    *) exit 1 ;;
+esac
 
 
 # ensure that all standard PCRs configured to be used have been extended
 
 pcrs=$(printf %s "$SEAL" | grep -Eo '\b1[3789]\b') || true
 
-if grep -E "^PCR-(${pcrs//$'\n'/|}):( 00| FF){20}" /sys/devices/*/*/pcrs;
+if grep -E "^PCR-(${pcrs//$'\n'/|}):( 00| FF){20}" "$SYSFS_TPM_DIR"/pcrs;
    [ $? != 1 ]; then
     message "PCR sanity check failed!"
     message "See /usr/share/doc/anti-evil-maid/README for details."
@@ -36,21 +52,31 @@ if grep -E "^PCR-(${pcrs//$'\n'/|}):( 00| FF){20}" /sys/devices/*/*/pcrs;
 fi
 
 
+# regenerate the freshness token and store it's hash in TPM
+
+head -c 20 /dev/random > "$AEM_DIR/$LABEL/secret.fre"
+updatefreshness "$AEM_DIR/$LABEL/secret.fre" "$LABEL_SUFFIX"
+
+
 # seal and save secret(s) to root partition
 
 mkdir -p "$TPM_DIR/$LABEL"
 
 SEALED=0
-for ext in txt png; do
+for ext in txt key otp fre; do
      input=$AEM_DIR/$LABEL/secret.$ext
     output=$TPM_DIR/$LABEL/secret.$ext.sealed2
 
     if [ ! -e "$input" ]; then
         message "Absent $input"
+    elif [ -e "$CACHE_DIR"/unseal-success \
+           -a "$output" -nt "$input" \
+           -a "$output" -nt /etc/anti-evil-maid.conf ]; then
+        message "Skipped $input (already sealed)"
     elif if [ ! -t 0 ]; then cat "$SRK_PASSWORD_CACHE"; fi |
          tpm_sealdata $Z $SEAL -i "$input" -o "$output"; then
         rm -f "${output%2}"
-        SEALED=$(($SEALED + 1))
+        SEALED=$((SEALED + 1))
         message "Sealed $input using $SEAL"
     else
         message "Failed $input"

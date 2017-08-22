@@ -13,7 +13,7 @@ License:	GPL
 URL:		https://www.qubes-os.org/
 
 BuildRequires:	trousers-devel
-Requires:	trousers
+Requires:	trousers systemd >= 231
 
 %description
 Additional tools not included in tpm-tools package.
@@ -28,3 +28,6 @@ cp -r sbin $RPM_BUILD_ROOT/usr
 %files
 /usr/sbin/tpm_pcr_extend
 /usr/sbin/tpm_z_srk
+/usr/sbin/tpm_nvread_stdout
+/usr/sbin/tpm_nvwrite_stdin
+/usr/sbin/notty

@@ -1,5 +1,4 @@
 #!/bin/sh -e
-
 . anti-evil-maid-lib
 LABEL_SUFFIX_CHARS=0-9a-zA-Z=.-
 BOOT_DIR=/boot
@@ -11,7 +10,7 @@ usage() {
     cat <<END
 
 Usage:
-  anti-evil-maid-install [-s <suffix>] [-F] <device>
+  anti-evil-maid-install [-s <suffix>] [-F] [-m] <device>
 
   Installs Anti Evil Maid to your system's boot partition, or to a different
   storage device (e.g. an SD card or a USB stick).
@@ -20,15 +19,21 @@ Usage:
 Arguments:
   -s: <device> gets labeled "$LABEL_PREFIX<suffix>"
 
-      <suffix> can be composed of 0-13 characters from the alphabet $LABEL_SUFFIX_CHARS
+      <suffix> can be composed of 0-13 characters from the alphabet
+        $LABEL_SUFFIX_CHARS
       It defaults to <device>'s current suffix, if any, or the empty string
       otherwise. Each of your AEM installations must have a unique suffix.
 
-      This suffix has no particular meaning, except that you can let it end in
-      .rm=1 or .rm=0 to hint that <device> is removable or fixed, respectively,
-      no matter what the Linux kernel detects.
+      This suffix has no particular meaning, except that you can let it end
+      in .rm=1 or .rm=0 to hint that <device> is removable or fixed,
+      respectively, no matter what the Linux kernel detects.
 
   -F: passed on to mkfs.ext4 (don't ask for confirmation, etc.)
+
+  -m: set up a multi-factor auth AEM media (EXPERIMENTAL)
+      Using time-based one time password and a LUKS key file, provides
+      resistance to shoulder surfing and video surveillance based passphrase
+      snooping.
 
 
 Examples:
@@ -42,6 +47,11 @@ Examples:
 
     anti-evil-maid-install -s .sd /dev/mmcblk0p1
 
+  Install MFA-enabled AEM on USB stick's first partition, overwriting it with
+  a new ext4 filesystem and marking it bootable:
+
+    anti-evil-maid-install -m /dev/sdb1
+
 END
 
     exit 1
@@ -50,11 +60,13 @@ END
 
 # check invocation
 
+alias mfa=false
 unset LABEL_SUFFIX F
-while getopts s:Fh opt; do
+while getopts s:Fhm opt; do
     case "$opt" in
         s) LABEL_SUFFIX=$OPTARG ;;
         F) F=-F ;;
+        m) alias mfa=true ;;
         *) usage ;;
     esac
 done
@@ -78,6 +90,7 @@ if [ -z "$(getluksuuids)" ]; then
     exit 1
 fi
 
+systemctl start tcsd
 
 # examine device
 
@@ -101,6 +114,29 @@ PART_NUM=${PART_DEV_REAL##*[!0-9]}
 if ! [ "$PART_NUM" -gt 0 ]; then
     log "Couldn't extract partition number: $PART_NUM"
     exit 1
+fi
+
+
+# MFA-specific checks
+
+if mfa && ! external "$PART_DEV"; then
+    log "WARNING: Installing MFA AEM on the same disk"
+    log "as Qubes OS will NOT provide any resistance"
+    log "against keyboard observation during boot!"
+    log "Additionally, compromise recovery using"
+    log "freshness token revocation will be a lot"
+    log "less feasible."
+    waitforenter
+elif mfa && ! removable "$PART_DEV" "$LABEL" ; then
+    log "WARNING: Installing MFA AEM on an internal"
+    log "disk will NOT provide any resistance"
+    log "against keyboard observation during boot!"
+    log "Additionally, compromise recovery using"
+    log "freshness token revocation will be a lot"
+    log "less feasible."
+    log "You can safely ignore this warning if the"
+    log "device in question is, in fact, removable."
+    waitforenter
 fi
 
 
@@ -142,6 +178,115 @@ if [   -n "$OLD_LABEL" -a \
        -e "$AEM_DIR/$OLD_LABEL" -a \
      ! -e "$AEM_DIR/$LABEL" ]; then
     mv -v "$AEM_DIR/$OLD_LABEL" "$AEM_DIR/$LABEL"
+fi
+
+
+# add the AEM media being created to the freshness database
+
+if suffixtoslot "$LABEL_SUFFIX" >/dev/null; then
+    log "WARNING: (possibly another) AEM media with the same"
+    log "label suffix is already enrolled in the freshness token"
+    log "database! Overwriting will result in the old AEM media"
+    log "failing to perform a successful AEM boot. If you're"
+    log "simply reinstalling on the same device or intentionally"
+    log "replacing an old AEM media that was lost/destroyed/etc.,"
+    log "it is safe to continue."
+    read -p "Proceed? [y/N] " response
+    case "$response" in
+        y|Y) echo "continuing..." ;;
+        *) exit ;;
+    esac
+else
+    assignslottosuffix "$LABEL_SUFFIX"
+    slot=$(suffixtoslot "$LABEL_SUFFIX")
+    log "Assigned slot $slot to this AEM media"
+fi
+
+
+# MFA: generate a TOTP seed
+
+if mfa && [ ! -e "$AEM_DIR/$LABEL/secret.otp" ]; then
+    log "Generating new 160-bit TOTP seed"
+    mkdir -p "$AEM_DIR/$LABEL"
+    otp_secret=$(head -c 20 /dev/random | base32 -w 0 | tr -d =)
+    echo "$otp_secret" > "$AEM_DIR/$LABEL/secret.otp"
+
+    # create an ANSI text QR code and show it in the terminal
+    otp_uri="otpauth://totp/${LABEL}?secret=${otp_secret}"
+    echo "$otp_uri" | qrencode -t ansiutf8
+    log "Please scan the above QR code with your OTP device."
+
+    # display the text form of secret to user, too
+    human_readable_secret="$(echo "$otp_secret" | sed 's/\(....\)/\1\ /g')"
+    log "Alternatively, you may manually enter the following"
+    log "secret into your OTP device:"
+    log "    $human_readable_secret"
+
+    if timedatectl status | grep -q 'RTC in local TZ: yes'; then
+        log ""
+        log "WARNING: Your computer's RTC (real-time clock) is set"
+        log "to store time in local timezone. This will cause wrong"
+        log "TOTP codes to be generated during AEM boot. Please fix"
+        log "this by running (as root):"
+        log "    timedatectl set-local-rtc 0"
+        waitforenter
+    fi
+
+    # check whether secret was provisioned correctly
+    log ""
+    log "After you have set up your OTP device, please enter"
+    log "the code displayed on your device and press <ENTER>"
+    log "to continue."
+    log ""
+
+    totp_tries=3
+    for try in $(seq $totp_tries); do
+        read -p "Code: "
+        if ! oathtool --totp -b "$otp_secret" "$REPLY" >/dev/null; then
+            log "Entered TOTP code is invalid!"
+            if [ "$try" -lt $totp_tries ]; then
+                log "Please check clock synchronization."
+                log "If you made mistake while manually entering the secret,"
+                log "remove the added token, repeat the process & try again."
+                log ""
+            else
+                log "Aborting AEM setup..."
+                exit 1
+            fi
+        else
+            break
+        fi
+    done
+
+    log "TOTP code matches, continuing AEM setup."
+fi
+
+
+# MFA: generate and enroll a LUKS key file if not already present
+
+if mfa && [ ! -e "$AEM_DIR/$LABEL/secret.key" ]; then
+    log "Generating new LUKS key file"
+    rawkey=$(mktemp)
+    head -c 64 /dev/random > "$rawkey"
+
+    log "Encrypting key file"
+    mkdir -p "$AEM_DIR/$LABEL"
+    scrypt enc "$rawkey" "$AEM_DIR/$LABEL/secret.key"
+
+    for uuid in $(getluksuuids); do
+        dev=/dev/disk/by-uuid/$uuid
+        devname=$(readlink -f "$dev")
+
+        log "Adding key file to new key slot for $devname (UUID $uuid)"
+
+        dmsetup table --showkeys luks-"$uuid" |
+        cut -d ' ' -f 5 |
+        unhex |
+        cryptsetup luksAddKey --master-key-file /dev/stdin "$dev" "$rawkey"
+    done
+
+    log "Shredding the unencrypted key file"
+    shred -zu "$rawkey"
 fi
 
 

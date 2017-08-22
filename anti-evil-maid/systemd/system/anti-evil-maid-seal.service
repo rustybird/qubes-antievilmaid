@@ -4,7 +4,7 @@ DefaultDependencies=false
 Requires=local-fs.target
 After=local-fs.target plymouth-start.service
 Before=basic.target
-ConditionKernelCommandLine=rd.antievilmaid
+ConditionKernelCommandLine=aem.uuid
 ConditionPathIsDirectory=/run/anti-evil-maid
 
 [Service]
@@ -12,6 +12,7 @@ ExecStart=/usr/sbin/anti-evil-maid-seal
 Type=oneshot
 StandardOutput=journal+console
 StandardError=inherit
+TimeoutStartSec=300
 
 [Install]
 WantedBy=basic.target

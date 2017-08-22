@@ -2,60 +2,49 @@
 set -e -o pipefail
 export LC_ALL=C
 
-#   usage: tpm_id [tpm_getpubek-argument...]
-# example: tpm_id -z
-#
-#  stdout: hex(sha256(TPM public Endorsement Key)) + \n
-#  status: 0 on success
 
+TPM_ID_INDEX="0x517562"
+
+
+usage() {
+    cat <<EOF
+Prints a 20-byte hex string TPM ID followed by a newline.
+
+Usage: tpm_id [-i]
+    -i     print the TPM ID NVRAM index
+EOF
+    exit 1
+}
 
 log() {
     echo "${0##*/}: $1" >&2
 }
 
-onlyhex() {
-    tr -dc 0-9a-f
+hex() {
+    xxd -ps | tr -dc 0-9a-f
 }
 
-unhex() {
-    onlyhex |
-    sed 's/\(..\)/\\x\1/g' |
-    xargs -0 printf
+getindex() {
+    echo "$TPM_ID_INDEX"
 }
 
-sha256_hex() {
-    sha256sum |
-    cut -f 1 -d ' '
-}
-
-getpubkey_hex() {
-    log "ignore the first \"Tspi_TPM_GetPubEndorsementKey failed\""
-
-    tpm_getpubek "$@" |
-    grep -E '^	([0-9a-f]{8}( |$))+' |
-    onlyhex
+getid() {
+    if ! tpm_nvinfo -i "$TPM_ID_INDEX" | grep -q "WRITEDEFINE"; then
+        log "TPM NVRAM area at index $TPM_ID_INDEX is not defined!"
+        log "Hint: did you run 'anti-evil-maid-tpm-setup'?"
+        echo "unknown"
+    else
+        tpm_nvread_stdout -i "$TPM_ID_INDEX" | hex
+        echo
+    fi
 }
 
 
-# The Endorsement Key is 2048 bits for TPM 1.2,
-# and "SHOULD" be 256 or 2048 bits for TPM 2.0:
-#
-# https://www.trustedcomputinggroup.org/files/static_page_files/7CAA5687-1A4B-B294-D04080D058E86C5F/Credential_Profile_EK_V2.0_R14_published.pdf#page=8
-#
-# As long as we have to scrape tpm_getpubek output,
-# let's err on the side of strictness.
+while getopts i opt; do
+    case "$opt" in
+        i) getindex && exit 0 ;;
+        *) usage ;;
+    esac
+done
 
-pubkey_hex=$(getpubkey_hex "$@")
-
-case ${#pubkey_hex} in
-    64|512)
-        echo "$pubkey_hex" |
-        unhex |
-        sha256_hex
-    ;;
-
-    *)
-        log "error: got something ${#pubkey_hex} hex chars long"
-        exit 1
-    ;;
-esac
+getid

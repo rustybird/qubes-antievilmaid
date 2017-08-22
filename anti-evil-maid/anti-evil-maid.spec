@@ -7,7 +7,11 @@ Name:		%{name}
 Version:	%{version}
 Release:	1%{?dist}
 Summary:    	Anti Evil Maid for initramfs-based systems.
-Requires:	dracut grub2-tools parted tboot tpm-tools tpm-extra trousers-changer systemd >= 208-19
+Requires:	dracut grub2-tools parted tboot tpm-tools
+Requires:	tpm-extra >= 4.0.0
+Requires:	trousers-changer >= 4.0.0
+Requires:	systemd >= 227
+Requires:	scrypt qrencode oathtool
 Requires(post):	dracut grub2-tools tboot systemd
 Obsoletes:	anti-evil-maid-dracut
 Vendor:		Invisible Things Lab
@@ -40,6 +44,7 @@ cp -r systemd $RPM_BUILD_ROOT/usr/lib
 /usr/sbin/anti-evil-maid-install
 /usr/sbin/anti-evil-maid-lib
 /usr/sbin/anti-evil-maid-seal
+/usr/sbin/anti-evil-maid-tpm-setup
 /usr/share/doc/anti-evil-maid/README
 /usr/lib/systemd/system/anti-evil-maid-seal.service
 /usr/lib/systemd/system/tcsd.service.d/anti-evil-maid-seal.conf

@@ -21,8 +21,11 @@ install() {
 
     dracut_install \
         /usr/sbin/anti-evil-maid-lib \
+        base32 \
+        blockdev \
         clear \
         cut \
+        date \
         file \
         /usr/share/misc/magic \
         grep \
@@ -30,23 +33,30 @@ install() {
         install \
         killall \
         lsblk \
+        oathtool \
         printf \
+        scrypt \
+        sed \
+        seq \
         sha1sum \
-        sha256sum \
         sort \
         tail \
         tcsd \
         tcsd_changer_identify \
         tee \
-        tpm_getpubek \
         tpm_id \
+        tpm_nvinfo \
+        tpm_nvread \
+        tpm_nvread_stdout \
         tpm_pcr_extend \
-        tpm_resetdalock \
         tpm_sealdata \
         tpm_unsealdata \
         tpm_z_srk \
+        tr \
+        uniq \
         wc \
-        xargs
+        xargs \
+        xxd
 
     dracut_install \
         $systemdsystemunitdir/anti-evil-maid-unseal.service \
